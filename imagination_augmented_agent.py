@@ -196,8 +196,8 @@ class ImaginationCore(object):
 
             imagined_state, imagined_reward = self.env_model(Variable(inputs, volatile=True))
 
-            imagined_state  = F.softmax(imagined_state).max(1)[1].data.cpu()
-            imagined_reward = F.softmax(imagined_reward).max(1)[1].data.cpu()
+            imagined_state  = F.softmax(imagined_state, dim=1).max(1)[1].data.cpu()
+            imagined_reward = F.softmax(imagined_reward, dim=1).max(1)[1].data.cpu()
 
             imagined_state = target_to_pix(imagined_state.numpy())
             imagined_state = torch.FloatTensor(imagined_state).view(rollout_batch_size, *self.in_shape)
@@ -299,7 +299,8 @@ for i_update in range(num_frames):
         Variable(rollout.actions).view(-1, 1)
     )
 
-    distil_loss = 0.01 * (F.softmax(logit).detach() * F.log_softmax(distil_logit)).sum(1).mean()
+    distil_loss = 0.01 * (F.softmax(logit, dim=1).detach() *
+            F.log_softmax(distil_logit, dim=1)).sum(1).mean()
 
     values = values.view(num_steps, num_envs, 1)
     action_log_probs = action_log_probs.view(num_steps, num_envs, 1)
