@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import torch.autograd as autograd
+from tqdm import tqdm
 
 from common.multiprocessing_env import SubprocVecEnv
 from common.minipacman import MiniPacman
@@ -175,7 +176,7 @@ rollout.states[0].copy_(state)
 episode_rewards = torch.zeros(num_envs, 1)
 final_rewards   = torch.zeros(num_envs, 1)
 
-for i_update in range(num_frames):
+for i_update in tqdm(range(num_frames)):
 
     for step in range(num_steps):
         action = actor_critic.act(Variable(state))
