@@ -101,6 +101,8 @@ class RolloutEncoder(nn.Module):
         state = self.features(state)
         state = state.view(num_steps, batch_size, -1)
         rnn_input = torch.cat([state, reward], 2)
+        print(rnn_input)
+
         _, hidden = self.gru(rnn_input)
         return hidden.squeeze(0)
 
@@ -236,6 +238,7 @@ if USE_CUDA:
     distil_policy = distil_policy.cuda()
     actor_critic  = actor_critic.cuda()
 
+
 gamma = 0.99
 entropy_coef = 0.01
 value_loss_coef = 0.5
@@ -259,6 +262,7 @@ final_rewards   = torch.zeros(num_envs, 1)
 
 print('Starting to train')
 print('Using cuda?', USE_CUDA)
+
 for i_update in range(num_frames):
     for step in range(num_steps):
         if USE_CUDA:
@@ -315,11 +319,10 @@ for i_update in range(num_frames):
     distil_loss.backward()
     optimizer.step()
 
-    if i_update % 100 == 0:
-        all_rewards.append(final_rewards.mean())
-        all_losses.append(loss.data[0])
-        print('Epoch %i, Rewards %.2f, Loss %.2f' % (i_update,
-            np.mean(all_rewards[-10:]), all_losses[-1]))
+    all_rewards.append(final_rewards.mean())
+    all_losses.append(loss.data[0])
+    print('Epoch %i, Rewards %.2f, Loss %.2f' % (i_update,
+        np.mean(all_rewards[-10:]), all_losses[-1]))
 
     rollout.after_update()
 
