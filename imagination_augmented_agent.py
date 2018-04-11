@@ -10,9 +10,16 @@ from common.multiprocessing_env import SubprocVecEnv
 from common.minipacman import MiniPacman
 from common.environment_model import EnvModel
 from common.actor_critic import OnPolicy, ActorCritic, RolloutStorage
+import time
 
 USE_CUDA = torch.cuda.is_available()
 Variable = lambda *args, **kwargs: autograd.Variable(*args, **kwargs).cuda() if USE_CUDA else autograd.Variable(*args, **kwargs)
+
+SHOULD_LOG = False
+
+def plog(s, time=''):
+    if SHOULD_LOG:
+        print(s, time)
 
 pixels = (
     (0.0, 1.0, 0.0),
@@ -146,6 +153,7 @@ class I2A(OnPolicy):
         batch_size = state.size(0)
 
         imagined_state, imagined_reward = self.imagination(state.data)
+
         hidden = self.encoder(Variable(imagined_state), Variable(imagined_reward))
         hidden = hidden.view(batch_size, -1)
 
@@ -169,7 +177,7 @@ class ImaginationCore(object):
         self.in_shape      = in_shape
         self.num_actions   = num_actions
         self.num_rewards   = num_rewards
-        self.env_model     = env_model
+        self.env_model     = torch.nn.DataParallel(env_model, device_ids=[0,1,2]).cuda()
         self.distil_policy = distil_policy
         self.full_rollout  = full_rollout
 
@@ -182,16 +190,28 @@ class ImaginationCore(object):
 
         if self.full_rollout:
             state = state.unsqueeze(0).repeat(self.num_actions, 1, 1, 1, 1).view(-1, *self.in_shape)
-            action = torch.LongTensor([[i] for i in range(self.num_actions)]*batch_size)
+            action = torch.LongTensor([[i] for i in range(self.num_actions)] * batch_size)
             rollout_batch_size = batch_size * self.num_actions
         else:
+            print('NOT USING FULL ROLLOUT')
             action = self.distil_policy.act(Variable(state, volatile=True))
             action = action.data.cpu()
             rollout_batch_size = batch_size
+            raise ValueError('CANNOT USE FULL ROLLOUT')
 
         for step in range(self.num_rolouts):
-            onehot_action = torch.zeros(rollout_batch_size, self.num_actions, *self.in_shape[1:])
-            onehot_action[range(rollout_batch_size), action] = 1
+            # Creating the whole thing to be ones to start off with assumes
+            # that
+            # batch size 80
+            # [400, 5, 15, 19]
+            onehot_action = torch.ones(rollout_batch_size, self.num_actions, *self.in_shape[1:])
+
+            # action is a column vector of action indices
+            #onehot_action[range(rollout_batch_size), action] = 1
+
+            #if not (np.all(x == 1)):
+            #    raise ValueError('NOT ALL EQUAL ONE')
+
             inputs = torch.cat([state, onehot_action], 1)
 
             imagined_state, imagined_reward = self.env_model(Variable(inputs, volatile=True))
@@ -262,10 +282,19 @@ final_rewards   = torch.zeros(num_envs, 1)
 print('Starting to train')
 print('Using cuda?', USE_CUDA)
 
+#actor_critic = nn.DataParallel(actor_critic, device_ids=[0,1,2]).cuda()
+#distil_policy = nn.DataParallel(distil_policy)
+
+print('Using: %i GPUs' % (torch.cuda.device_count()))
+
 for i_update in range(num_frames):
+    overall_start = time.time()
+
+    start = time.time()
     for step in range(num_steps):
         if USE_CUDA:
             current_state = current_state.cuda()
+
         action = actor_critic.act(Variable(current_state))
 
         next_state, reward, done, _ = envs.step(action.squeeze(1).cpu().data.numpy())
@@ -283,22 +312,39 @@ for i_update in range(num_frames):
         current_state = torch.FloatTensor(np.float32(next_state))
         rollout.insert(step, current_state, action.data, reward, masks)
 
+    end = time.time()
+    plog('Roll out takes', end - start)
 
+    start = time.time()
     _, next_value = actor_critic(Variable(rollout.states[-1], volatile=True))
     next_value = next_value.data
+    end = time.time()
+    plog('Next value takes', end - start)
 
+    start = time.time()
     returns = rollout.compute_returns(next_value, gamma)
+    end = time.time()
+    plog('Computing returns takes', end - start)
 
+    # Computing Action
+
+    start = time.time()
     logit, action_log_probs, values, entropy = actor_critic.evaluate_actions(
         Variable(rollout.states[:-1]).view(-1, *state_shape),
         Variable(rollout.actions).view(-1, 1)
     )
+    end = time.time()
+    plog('Actor critic evaluation took', end - start)
 
+    start = time.time()
     distil_logit, _, _, _ = distil_policy.evaluate_actions(
         Variable(rollout.states[:-1]).view(-1, *state_shape),
         Variable(rollout.actions).view(-1, 1)
     )
+    end = time.time()
+    plog('Distilled policy evaluated', end - start)
 
+    start = time.time()
     distil_loss = 0.01 * (F.softmax(logit, dim=1).detach() *
             F.log_softmax(distil_logit, dim=1)).sum(1).mean()
 
@@ -308,7 +354,13 @@ for i_update in range(num_frames):
 
     value_loss = advantages.pow(2).mean()
     action_loss = -(Variable(advantages.data) * action_log_probs).mean()
+    end = time.time()
+    plog('Calculated losses took', end - start)
 
+    ###############################################
+    ###############################################
+
+    start = time.time()
     optimizer.zero_grad()
     loss = value_loss * value_loss_coef + action_loss - entropy * entropy_coef
     loss.backward()
@@ -318,6 +370,11 @@ for i_update in range(num_frames):
     distil_optimizer.zero_grad()
     distil_loss.backward()
     optimizer.step()
+    end = time.time()
+    plog('Backpropagating took', end - start)
+
+    overall_end = time.time()
+    print('Epoch took', overall_end - overall_start)
 
     all_rewards.append(final_rewards.mean())
     all_losses.append(loss.data[0])
@@ -325,5 +382,10 @@ for i_update in range(num_frames):
         np.mean(all_rewards[-10:]), all_losses[-1]))
 
     rollout.after_update()
+
+    if i_update != 0 and i_update % 10000 == 0:
+        print('Saving model!')
+        torch.save(actor_critic.state_dict(), "i2a_" + mode + '_' + str(i_update))
+
 
 torch.save(actor_critic.state_dict(), "i2a_" + mode)
