@@ -104,11 +104,15 @@ class RolloutEncoder(nn.Module):
         num_steps  = state.size(0)
         batch_size = state.size(1)
 
+        # In shape is just the shape of the state space
         state = state.view(-1, *self.in_shape)
+        # Extract features from the state space using a conv net
         state = self.features(state)
         state = state.view(num_steps, batch_size, -1)
         rnn_input = torch.cat([state, reward], 2)
 
+        # Process sequence of frames with RNN to return final score for
+        # sequence
         _, hidden = self.gru(rnn_input)
         return hidden.squeeze(0)
 
@@ -150,19 +154,31 @@ class I2A(OnPolicy):
         self.actor   = nn.Linear(256, num_actions)
 
     def forward(self, state):
+        # Batch size is first element of the state input
+        # This will be the number of environments multiplied by the action
+        # space
         batch_size = state.size(0)
 
+        # Get a full rollout of an imagined sequence
+        # This will be a tensor of size
+        # [rollout count, # envs (batch size) * actions, *state space]
         imagined_state, imagined_reward = self.imagination(state.data)
 
         hidden = self.encoder(Variable(imagined_state), Variable(imagined_reward))
+        # Get encoded representation of each state
         hidden = hidden.view(batch_size, -1)
 
+        # Extract features from state
         state = self.features(state)
         state = state.view(state.size(0), -1)
 
+        # Input is a weighted sum of imagination scores and extracted features
+        # from input. The state is the model free path and the hidden
+        # is the model based path
         x = torch.cat([state, hidden], 1)
         x = self.fc(x)
 
+        # Use our standard policy from a2c
         logit = self.actor(x)
         value = self.critic(x)
 
@@ -171,6 +187,8 @@ class I2A(OnPolicy):
     def feature_size(self):
         return self.features(autograd.Variable(torch.zeros(1, *self.in_shape))).view(1, -1).size(1)
 
+# The output of this is
+# [rollout count, # envs (batch size) * actions, *state space]
 class ImaginationCore(object):
     def __init__(self, num_rolouts, in_shape, num_actions, num_rewards, env_model, distil_policy, full_rollout=True):
         self.num_rolouts  = num_rolouts
@@ -205,16 +223,20 @@ class ImaginationCore(object):
             # that
             # batch size 80
             # [400, 5, 15, 19]
-            onehot_action = torch.zeros(rollout_batch_size, self.num_actions, *self.in_shape[1:])
 
-            # action is a column vector of action indices
+            # Encode the actions
+            onehot_action = torch.zeros(rollout_batch_size, self.num_actions, *self.in_shape[1:])
             onehot_action[range(rollout_batch_size), action] = 1
 
             #if not (np.all(x == 1)):
             #    raise ValueError('NOT ALL EQUAL ONE')
 
+            # Combination of the pixel frames and the actions are the input to
+            # the environment model. Note that for a full roll out we are
+            # taking every single action and then evaluating it
             inputs = torch.cat([state, onehot_action], 1)
 
+            # Imagine next states and rewards
             imagined_state, imagined_reward = self.env_model(Variable(inputs, volatile=True))
 
             imagined_state  = F.softmax(imagined_state, dim=1).max(1)[1].data.cpu()
@@ -253,14 +275,14 @@ actor_critic = I2A(state_shape, num_actions, num_rewards, 256, imagination, full
 lr    = 7e-4
 eps   = 1e-5
 alpha = 0.99
-optimizer = optim.RMSprop(actor_critic.parameters(), lr, eps=eps, alpha=alpha)
 
+# Optimize parameters of I2A
+optimizer = optim.RMSprop(actor_critic.parameters(), lr, eps=eps, alpha=alpha)
 
 if USE_CUDA:
     env_model     = env_model.cuda()
     distil_policy = distil_policy.cuda()
     actor_critic  = actor_critic.cuda()
-
 
 gamma = 0.99
 entropy_coef = 0.01
@@ -275,9 +297,12 @@ rollout.cuda()
 all_rewards = []
 all_losses  = []
 
+# Get the initial state
 state = envs.reset()
+# Convert to torch tensor
 current_state = torch.FloatTensor(np.float32(state))
 
+# Set to the replay buffer
 rollout.states[0].copy_(current_state)
 
 episode_rewards = torch.zeros(num_envs, 1)
@@ -285,9 +310,6 @@ final_rewards   = torch.zeros(num_envs, 1)
 
 print('Starting to train')
 print('Using cuda?', USE_CUDA)
-
-#actor_critic = nn.DataParallel(actor_critic, device_ids=[0,1,2]).cuda()
-#distil_policy = nn.DataParallel(distil_policy)
 
 print('Using: %i GPUs' % (torch.cuda.device_count()))
 
@@ -299,6 +321,7 @@ for i_update in range(num_frames):
         if USE_CUDA:
             current_state = current_state.cuda()
 
+        # Get I2A action for state
         action = actor_critic.act(Variable(current_state))
 
         next_state, reward, done, _ = envs.step(action.squeeze(1).cpu().data.numpy())
@@ -319,36 +342,25 @@ for i_update in range(num_frames):
     end = time.time()
     plog('Roll out takes', end - start)
 
-    start = time.time()
     _, next_value = actor_critic(Variable(rollout.states[-1], volatile=True))
     next_value = next_value.data
-    end = time.time()
-    plog('Next value takes', end - start)
 
-    start = time.time()
+    # Apply the bellman equation to calculate returns
     returns = rollout.compute_returns(next_value, gamma)
-    end = time.time()
-    plog('Computing returns takes', end - start)
 
-    # Computing Action
-
-    start = time.time()
+    # just the standard way of evaluating actions given state and action
+    # This is for I2A
     logit, action_log_probs, values, entropy = actor_critic.evaluate_actions(
         Variable(rollout.states[:-1]).view(-1, *state_shape),
         Variable(rollout.actions).view(-1, 1)
     )
-    end = time.time()
-    plog('Actor critic evaluation took', end - start)
 
-    start = time.time()
+    # This is for the normal A2C
     distil_logit, _, _, _ = distil_policy.evaluate_actions(
         Variable(rollout.states[:-1]).view(-1, *state_shape),
         Variable(rollout.actions).view(-1, 1)
     )
-    end = time.time()
-    plog('Distilled policy evaluated', end - start)
 
-    start = time.time()
     distil_loss = 0.01 * (F.softmax(logit, dim=1).detach() *
             F.log_softmax(distil_logit, dim=1)).sum(1).mean()
 
@@ -358,13 +370,12 @@ for i_update in range(num_frames):
 
     value_loss = advantages.pow(2).mean()
     action_loss = -(Variable(advantages.data) * action_log_probs).mean()
-    end = time.time()
-    plog('Calculated losses took', end - start)
 
     ###############################################
     ###############################################
 
     start = time.time()
+    # Apparently before applying a gradient you have to zero out the gradients
     optimizer.zero_grad()
     loss = value_loss * value_loss_coef + action_loss - entropy * entropy_coef
     loss.backward()
