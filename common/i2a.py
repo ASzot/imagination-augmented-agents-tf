@@ -1,5 +1,7 @@
 import numpy as np
 
+from common.actor_critic import OnPolicy
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
