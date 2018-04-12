@@ -1,3 +1,15 @@
+import numpy as np
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+import torch.autograd as autograd
+from common.torch_util import Variable
+
+from common.pacman_util import target_to_pix
+
+
 # The output of this is
 # [rollout count, # envs (batch size) * actions, *state space]
 class ImaginationCore(object):

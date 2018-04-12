@@ -16,8 +16,6 @@ from common.rollout_encoder import RolloutEncoder
 from common.imagination_core import ImaginationCore
 from common.i2a import I2A
 
-USE_CUDA = torch.cuda.is_available()
-Variable = lambda *args, **kwargs: autograd.Variable(*args, **kwargs).cuda() if USE_CUDA else autograd.Variable(*args, **kwargs)
 
 SHOULD_LOG = False
 

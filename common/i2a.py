@@ -1,17 +1,19 @@
 import numpy as np
 
-from common.actor_critic import OnPolicy
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import torch.autograd as autograd
 
+from common.actor_critic import OnPolicy
+from common.rollout_encoder import RolloutEncoder
+
+from common.torch_util import Variable
 
 class I2A(OnPolicy):
     def __init__(self, in_shape, num_actions, num_rewards, hidden_size, imagination, full_rollout=True):
-        super(I2A, self).__init__()
+        super().__init__()
 
         self.in_shape      = in_shape
         self.num_actions   = num_actions

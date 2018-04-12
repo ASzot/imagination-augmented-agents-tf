@@ -1,4 +1,4 @@
-
+import numpy as np
 
 pixels = (
     (0.0, 1.0, 0.0),

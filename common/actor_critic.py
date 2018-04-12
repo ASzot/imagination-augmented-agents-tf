@@ -7,7 +7,7 @@ from torch.autograd import Variable
 
 class OnPolicy(nn.Module):
     def __init__(self):
-        super(OnPolicy, self).__init__()
+        super().__init__()
 
     def forward(self, x):
         raise NotImplementedError
