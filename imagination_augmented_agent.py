@@ -191,6 +191,7 @@ class ImaginationCore(object):
         if self.full_rollout:
             state = state.unsqueeze(0).repeat(self.num_actions, 1, 1, 1, 1).view(-1, *self.in_shape)
             action = torch.LongTensor([[i] for i in range(self.num_actions)] * batch_size)
+            action = action.view(-1)
             rollout_batch_size = batch_size * self.num_actions
         else:
             print('NOT USING FULL ROLLOUT')
@@ -204,10 +205,10 @@ class ImaginationCore(object):
             # that
             # batch size 80
             # [400, 5, 15, 19]
-            onehot_action = torch.ones(rollout_batch_size, self.num_actions, *self.in_shape[1:])
+            onehot_action = torch.zeros(rollout_batch_size, self.num_actions, *self.in_shape[1:])
 
             # action is a column vector of action indices
-            #onehot_action[range(rollout_batch_size), action] = 1
+            onehot_action[range(rollout_batch_size), action] = 1
 
             #if not (np.all(x == 1)):
             #    raise ValueError('NOT ALL EQUAL ONE')
@@ -236,12 +237,15 @@ class ImaginationCore(object):
 
 full_rollout = True
 
+# Get the env model which is trained to predict the next frame and the reward
+# associated with the current frame
 env_model     = EnvModel(envs.observation_space.shape, num_pixels, num_rewards)
 env_model.load_state_dict(torch.load("env_model_" + mode))
 
 distil_policy = ActorCritic(envs.observation_space.shape, envs.action_space.n)
 distil_optimizer = optim.Adam(distil_policy.parameters())
 
+# First parameter is the number of rollouts
 imagination = ImaginationCore(1, state_shape, num_actions, num_rewards, env_model, distil_policy, full_rollout=full_rollout)
 
 actor_critic = I2A(state_shape, num_actions, num_rewards, 256, imagination, full_rollout=full_rollout)

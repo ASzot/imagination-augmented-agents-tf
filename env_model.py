@@ -55,22 +55,6 @@ def rewards_to_target(mode, rewards):
         target.append(reward_to_categorical[mode][reward])
     return target
 
-def plot(frame_idx, rewards, losses):
-    clear_output(True)
-    plt.figure(figsize=(20,5))
-    plt.subplot(131)
-    plt.title('loss %s' % losses[-1])
-    plt.plot(losses)
-    plt.show()
-
-def displayImage(image, step, reward):
-    s = str(step) + " " + str(reward)
-    plt.title(s)
-    plt.imshow(image)
-    plt.show()
-
-
-
 
 class BasicBlock(nn.Module):
     def __init__(self, in_shape, n1, n2, n3):
@@ -111,8 +95,6 @@ class BasicBlock(nn.Module):
         tiled      = pooled.expand((x.size(0),) + self.in_shape)
         out        = torch.cat([tiled, x], 1)
         return out
-
-
 
 
 class EnvModel(nn.Module):
@@ -218,13 +200,19 @@ losses = []
 all_rewards = []
 
 for frame_idx, states, actions, rewards, next_states, dones in play_games(envs, num_updates):
+    # States is the pixel values of the scene
     states      = torch.FloatTensor(states)
+    # Actions is the numerical index of which action was taken
     actions     = torch.LongTensor(actions)
+
+    # Notice that states will be for a number of environments. This corresponds
+    # to the batch size.
 
     batch_size = states.size(0)
 
     onehot_actions = torch.zeros(batch_size, num_actions, *state_shape[1:])
     onehot_actions[range(batch_size), actions] = 1
+    # Concatenate to form a input vector of size [32, 3, 15, 19]
     inputs = Variable(torch.cat([states, onehot_actions], 1))
 
     if USE_CUDA:
@@ -239,7 +227,10 @@ for frame_idx, states, actions, rewards, next_states, dones in play_games(envs, 
     target_reward = Variable(torch.LongTensor(target_reward))
 
     optimizer.zero_grad()
+    # Just get the loss between the imagined image and the sequentially next
+    # image
     image_loss  = criterion(imagined_state, target_state)
+    # Get the loss between the actual reward and the predicted reward
     reward_loss = criterion(imagined_reward, target_reward)
     loss = image_loss + reward_coef * reward_loss
     loss.backward()
