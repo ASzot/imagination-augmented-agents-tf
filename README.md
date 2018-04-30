@@ -1,1 +1,1 @@
-# I2A
+# Imagination Augmented Agents
