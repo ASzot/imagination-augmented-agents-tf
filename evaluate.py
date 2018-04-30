@@ -4,7 +4,7 @@ from a2c import get_actor_critic
 from common.minipacman import MiniPacman
 import tensorflow as tf
 
-os.environ["CUDA_VISIBLE_DEVICES"]="1"
+#os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
 nenvs = 1
 nsteps=5
@@ -20,7 +20,7 @@ states = env.reset()
 
 with tf.Session() as sess:
     actor_critic = get_actor_critic(sess, nenvs, nsteps, ob_space, ac_space)
-    actor_critic.load('weights/model_100000.ckpt')
+    actor_critic.load('/Users/andrewszot/Downloads/weights/model_100000.ckpt')
 
     total_reward = 0
 
