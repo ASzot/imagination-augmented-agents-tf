@@ -182,6 +182,10 @@ if __name__ == '__main__':
     save_name = 'model'
     save_path = 'weights'
 
+    load_count = 100000
+    load_path = 'weights/model_%i.ckpt' % load_count
+    #load_path = None
+
     def make_env():
         def _thunk():
             env = MiniPacman('regular', 1000)
@@ -200,6 +204,10 @@ if __name__ == '__main__':
 
     with tf.Session() as sess:
         actor_critic = get_actor_critic(sess, nenvs, nsteps, ob_space, ac_space)
+        if load_path is not None:
+            actor_critic.load(load_path)
+            print('Loaded a2c')
+
         sess.run(tf.global_variables_initializer())
 
         batch_ob_shape = (nenvs*nsteps, nw, nh, nc)
@@ -211,7 +219,7 @@ if __name__ == '__main__':
         episode_rewards = np.zeros((nenvs, ))
         final_rewards   = np.zeros((nenvs, ))
 
-        for update in tqdm(range(1, total_timesteps)):
+        for update in tqdm(range(load_count + 1, total_timesteps)):
             # mb stands for mini batch
             mb_obs, mb_rewards, mb_actions, mb_values, mb_dones = [],[],[],[],[]
             for n in range(nsteps):
