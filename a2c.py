@@ -1,242 +1,274 @@
+import os
+import gym
+import time
+import logging
 import numpy as np
-
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
-import torch.autograd as autograd
+import tensorflow as tf
+from common.minipacman import MiniPacman
+from common.multiprocessing_env import SubprocVecEnv
+import tensorflow.contrib.slim as slim
 from tqdm import tqdm
 
-from common.multiprocessing_env import SubprocVecEnv
-from common.minipacman import MiniPacman
 
-import matplotlib.pyplot as plt
-
-USE_CUDA = torch.cuda.is_available()
-Variable = lambda *args, **kwargs: autograd.Variable(*args, **kwargs).cuda() if USE_CUDA else autograd.Variable(*args, **kwargs)
-
-if USE_CUDA:
-    print('Using cuda!')
-else:
-    print('Not using cuda!')
+def discount_with_dones(rewards, dones, gamma):
+    discounted = []
+    r = 0
+    for reward, done in zip(rewards[::-1], dones[::-1]):
+        r = reward + gamma*r*(1.-done) # fixed off by one bug
+        discounted.append(r)
+    return discounted[::-1]
 
 
-class OnPolicy(nn.Module):
-    def __init__(self):
-        super(OnPolicy, self).__init__()
+def cat_entropy(logits):
+    a0 = logits - tf.reduce_max(logits, 1, keep_dims=True)
+    ea0 = tf.exp(a0)
+    z0 = tf.reduce_sum(ea0, 1, keep_dims=True)
+    p0 = ea0 / z0
+    return tf.reduce_sum(p0 * (tf.log(z0) - a0), 1)
 
-    def forward(self, x):
-        raise NotImplementedError
+class CnnPolicy(object):
+    def __init__(self, sess, ob_space, ac_space, nbatch, nsteps, reuse=False):
+        nh, nw, nc = ob_space
 
-    def act(self, x, deterministic=True):
-        logit, value = self.forward(x)
-        probs = F.softmax(logit)
+        ob_shape = (nbatch, nh, nw, nc)
+        nact = ac_space.n
+        X = tf.placeholder(tf.float32, ob_shape) #obs
+        with tf.variable_scope("model", reuse=reuse):
+            conv1 = slim.conv2d(activation_fn=tf.nn.relu,
+                                        inputs=X,
+                                        num_outputs=16,
+                                        kernel_size=[3,3],
+                                        stride=[1,1],
+                                        padding='VALID')
+            conv2 = slim.conv2d(activation_fn=tf.nn.relu,
+                                        inputs=conv1,
+                                        num_outputs=16,
+                                        kernel_size=[3,3],
+                                        stride=[2,2],
+                                        padding='VALID')
+            h = slim.fully_connected(slim.flatten(conv2), 256, activation_fn=tf.nn.relu)
+            with tf.variable_scope('pi'):
+                pi = slim.fully_connected(h, nact,
+                        activation_fn=None,
+                        weights_initializer=tf.random_normal_initializer(0.01),
+                        biases_initializer=None)
 
-        if deterministic:
-            action = probs.max(1)[1]
-        else:
-            action = probs.multinomial()
+            with tf.variable_scope('v'):
+                vf = slim.fully_connected(h, 1,
+                        activation_fn=None,
+                        weights_initializer=tf.random_normal_initializer(0.01),
+                        biases_initializer=None)[:, 0]
 
-        return action
+        # Sample action. `pi` is like the logits
+        u = tf.random_uniform(tf.shape(pi))
+        self.a0 = tf.argmax(pi- tf.log(-tf.log(u)), axis=-1)
 
-    def evaluate_actions(self, x, action):
-        logit, value = self.forward(x)
+        # Get the negative log likelihood
+        one_hot_actions = tf.one_hot(self.a0, pi.get_shape().as_list()[-1])
+        self.neglogp0 = tf.nn.softmax_cross_entropy_with_logits(
+            logits=pi,
+            labels=one_hot_actions)
 
-        probs     = F.softmax(logit)
-        log_probs = F.log_softmax(logit)
+        self.X = X
+        self.pi = pi
+        self.vf = vf
 
-        action_log_probs = log_probs.gather(1, action)
-        entropy = -(probs * log_probs).sum(1).mean()
+    def step(self, sess, ob):
+        a, v, neglogp = sess.run([self.a0, self.vf, self.neglogp0], {self.X:ob})
+        return a, v, neglogp
 
-        return logit, action_log_probs, value, entropy
+    def value(self, sess, ob):
+        return sess.run(self.vf, {self.X:ob})
 
 
-class ActorCritic(OnPolicy):
-    def __init__(self, in_shape, num_actions):
-        super(ActorCritic, self).__init__()
+class ActorCritic(object):
+    def __init__(self, sess, policy, ob_space, ac_space, nenvs, nsteps,
+        ent_coef, vf_coef, max_grad_norm, lr, alpha, epsilon, logs_path='./logs/'):
 
-        self.in_shape = in_shape
+        self.sess = sess
 
-        self.features = nn.Sequential(
-            nn.Conv2d(in_shape[0], 16, kernel_size=3, stride=1),
-            nn.ReLU(),
-            nn.Conv2d(16, 16, kernel_size=3, stride=2),
-            nn.ReLU(),
+        nact = ac_space.n
+        nbatch = nenvs*nsteps
+
+        self.actions = tf.placeholder(tf.int32, [nbatch])
+        self.advantages = tf.placeholder(tf.float32, [nbatch])
+        self.rewards = tf.placeholder(tf.float32, [nbatch])
+
+        self.step_model = policy(self.sess, ob_space, ac_space, nenvs, 1, reuse=False)
+        self.train_model = policy(self.sess, ob_space, ac_space, nenvs*nsteps, nsteps, reuse=True)
+
+        # Negative log probability of actions
+        neglogpac = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.train_model.pi,
+                labels=self.actions)
+
+        # Policy gradient loss
+        self.pg_loss = tf.reduce_mean(self.advantages * neglogpac)
+        # Value function loss
+        self.vf_loss = tf.reduce_mean(tf.square(tf.squeeze(self.train_model.vf) - self.rewards) / 2.0)
+        self.entropy = tf.reduce_mean(cat_entropy(self.train_model.pi))
+        self.loss = self.pg_loss - (self.entropy * ent_coef) + (self.vf_loss * vf_coef)
+
+        with tf.variable_scope('model'):
+            params = tf.trainable_variables()
+
+        grads = tf.gradients(self.loss, params)
+        if max_grad_norm is not None:
+            grads, grad_norm = tf.clip_by_global_norm(grads, max_grad_norm)
+        grads = list(zip(grads, params))
+
+        trainer = tf.train.RMSPropOptimizer(learning_rate=lr, decay=alpha, epsilon=epsilon)
+        self.opt = trainer.apply_gradients(grads)
+        self.saver = tf.train.Saver(max_to_keep=15)
+
+        # Tensorboard
+        tf.summary.scalar('Loss', self.loss)
+        tf.summary.scalar('Policy gradient loss', self.pg_loss)
+        tf.summary.scalar('Value function loss', self.vf_loss)
+
+        self.summary_op = tf.summary.merge_all()
+
+        self.writer = tf.summary.FileWriter(logs_path, graph=self.sess.graph)
+
+
+    def train(self, obs, rewards, masks, actions, values, step):
+        advs = rewards - values
+
+        loss, policy_loss, value_loss, policy_entropy, _, summary = self.sess.run(
+            [self.loss, self.pg_loss, self.vf_loss, self.entropy, self.opt,
+                self.summary_op],
+            feed_dict= {self.train_model.X: obs, self.actions: actions,
+                self.advantages: advs, self.rewards: rewards}
         )
 
-        self.fc = nn.Sequential(
-            nn.Linear(self.feature_size(), 256),
-            nn.ReLU(),
-        )
+        self.writer.add_summary(summary, step)
 
-        self.critic  = nn.Linear(256, 1)
-        self.actor   = nn.Linear(256, num_actions)
+        return loss, policy_loss, value_loss, policy_entropy
 
-    def forward(self, x):
-        x = self.features(x)
-        x = x.view(x.size(0), -1)
-        x = self.fc(x)
-        logit = self.actor(x)
-        value = self.critic(x)
-        return logit, value
+    def act(self, obs):
+        return self.step_model.step(self.sess, obs)
 
-    def feature_size(self):
-        return self.features(autograd.Variable(torch.zeros(1, *self.in_shape))).view(1, -1).size(1)
+    def critique(self, obs):
+        return self.step_model.value(self.sess, obs)
 
+    def save(self, path, name):
+        if not os.path.exists(path):
+            os.makedirs(path)
+        self.saver.save(self.sess, path + '/' + name)
+
+    def load(self, full_path):
+        self.saver.restore(self.sess, full_path)
 
 
-# @ikostrikov style
+def get_actor_critic(sess, nenvs, nsteps, ob_space, ac_space):
+    vf_coef=0.5
+    ent_coef=0.01
+    max_grad_norm=0.5
+    lr=7e-4
+    epsilon=1e-5
+    alpha=0.99
+    actor_critic = ActorCritic(sess, CnnPolicy, ob_space, ac_space, nenvs, nsteps,
+            ent_coef, vf_coef, max_grad_norm, lr, alpha, epsilon)
 
-class RolloutStorage(object):
-    def __init__(self, num_steps, num_envs, state_shape):
-        self.num_steps = num_steps
-        self.num_envs  = num_envs
-        self.states  = torch.zeros(num_steps + 1, num_envs, *state_shape)
-        self.rewards = torch.zeros(num_steps,     num_envs, 1)
-        self.masks   = torch.ones(num_steps  + 1, num_envs, 1)
-        self.actions = torch.zeros(num_steps,     num_envs, 1).long()
-        self.use_cuda = False
+    return actor_critic
 
-    def cuda(self):
-        self.use_cuda  = True
-        self.states    = self.states.cuda()
-        self.rewards   = self.rewards.cuda()
-        self.masks     = self.masks.cuda()
-        self.actions   = self.actions.cuda()
+if __name__ == '__main__':
+    os.environ["CUDA_VISIBLE_DEVICES"]="0"
+    nenvs = 16
+    nsteps=5
+    total_timesteps=int(1e6)
+    gamma=0.99
+    log_interval=100
+    save_interval = 1e5
+    save_name = 'model'
+    save_path = 'weights'
 
-    def insert(self, step, state, action, reward, mask):
-        self.states[step + 1].copy_(state)
-        self.actions[step].copy_(action)
-        self.rewards[step].copy_(reward)
-        self.masks[step + 1].copy_(mask)
+    def make_env():
+        def _thunk():
+            env = MiniPacman('regular', 1000)
+            return env
 
-    def after_update(self):
-        self.states[0].copy_(self.states[-1])
-        self.masks[0].copy_(self.masks[-1])
+        return _thunk
 
-    def compute_returns(self, next_value, gamma):
-        returns   = torch.zeros(self.num_steps + 1, self.num_envs, 1)
-        if self.use_cuda:
-            returns = returns.cuda()
-        returns[-1] = next_value
-        for step in reversed(range(self.num_steps)):
-            returns[step] = returns[step + 1] * gamma * self.masks[step + 1] + self.rewards[step]
-        return returns[:-1]
+    envs = [make_env() for i in range(nenvs)]
+    envs = SubprocVecEnv(envs)
 
+    ob_space = envs.observation_space.shape
+    nw, nh, nc = ob_space
+    ac_space = envs.action_space
 
+    obs = envs.reset()
 
-mode = "regular"
-num_envs = 16
+    with tf.Session() as sess:
+        actor_critic = get_actor_critic(sess, nenvs, nsteps, ob_space, ac_space)
+        sess.run(tf.global_variables_initializer())
 
-def make_env():
-    def _thunk():
-        env = MiniPacman(mode, 1000)
-        return env
+        batch_ob_shape = (nenvs*nsteps, nw, nh, nc)
 
-    return _thunk
+        dones = [False for _ in range(nenvs)]
 
-envs = [make_env() for i in range(num_envs)]
-envs = SubprocVecEnv(envs)
+        nbatch = nenvs * nsteps
 
-state_shape = envs.observation_space.shape
+        episode_rewards = np.zeros((nenvs, ))
+        final_rewards   = np.zeros((nenvs, ))
 
-#a2c hyperparams:
-gamma = 0.99
-entropy_coef = 0.01
-value_loss_coef = 0.5
-max_grad_norm = 0.5
-num_steps = 5
-num_frames = int(10e5)
+        for update in tqdm(range(1, total_timesteps)):
+            # mb stands for mini batch
+            mb_obs, mb_rewards, mb_actions, mb_values, mb_dones = [],[],[],[],[]
+            for n in range(nsteps):
+                actions, values, _ = actor_critic.act(obs)
 
-#rmsprop hyperparams:
-lr    = 7e-4
-eps   = 1e-5
-alpha = 0.99
+                mb_obs.append(np.copy(obs))
+                mb_actions.append(actions)
+                mb_values.append(values)
+                mb_dones.append(dones)
 
-#Init a2c and rmsprop
-actor_critic = ActorCritic(envs.observation_space.shape, envs.action_space.n)
-optimizer = optim.RMSprop(actor_critic.parameters(), lr, eps=eps, alpha=alpha)
+                obs, rewards, dones, _ = envs.step(actions)
 
-if USE_CUDA:
-    actor_critic = actor_critic.cuda()
+                episode_rewards += rewards
+                masks = 1 - np.array(dones)
+                final_rewards *= masks
+                final_rewards += (1 - masks) * episode_rewards
+                episode_rewards *= masks
 
+                mb_rewards.append(rewards)
 
-rollout = RolloutStorage(num_steps, num_envs, envs.observation_space.shape)
-rollout.cuda()
+            mb_dones.append(dones)
 
-all_rewards = []
-all_losses  = []
+            #batch of steps to batch of rollouts
+            mb_obs = np.asarray(mb_obs, dtype=np.float32).swapaxes(1, 0).reshape(batch_ob_shape)
+            mb_rewards = np.asarray(mb_rewards, dtype=np.float32).swapaxes(1, 0)
+            mb_actions = np.asarray(mb_actions, dtype=np.int32).swapaxes(1, 0)
+            mb_values = np.asarray(mb_values, dtype=np.float32).swapaxes(1, 0)
+            mb_dones = np.asarray(mb_dones, dtype=np.bool).swapaxes(1, 0)
+            mb_masks = mb_dones[:, :-1]
+            mb_dones = mb_dones[:, 1:]
 
+            last_values = actor_critic.critique(obs).tolist()
 
-state = envs.reset()
-state = torch.FloatTensor(np.float32(state))
+            #discount/bootstrap off value fn
+            for n, (rewards, d, value) in enumerate(zip(mb_rewards, mb_dones, last_values)):
+                rewards = rewards.tolist()
+                d = d.tolist()
+                if d[-1] == 0:
+                    rewards = discount_with_dones(rewards+[value], d+[0], gamma)[:-1]
+                else:
+                    rewards = discount_with_dones(rewards, d, gamma)
+                mb_rewards[n] = rewards
 
-rollout.states[0].copy_(state)
+            mb_rewards = mb_rewards.flatten()
+            mb_actions = mb_actions.flatten()
+            mb_values = mb_values.flatten()
+            mb_masks = mb_masks.flatten()
 
-episode_rewards = torch.zeros(num_envs, 1)
-final_rewards   = torch.zeros(num_envs, 1)
+            loss, policy_loss, value_loss, policy_entropy = actor_critic.train(mb_obs,
+                    mb_rewards, mb_masks, mb_actions, mb_values, update)
 
-for i_update in tqdm(range(num_frames)):
+            if update % log_interval == 0 or update == 1:
+                print('%i): %.4f, %.4f, %.4f' % (update, policy_loss, value_loss, policy_entropy))
+                print(final_rewards.mean())
 
-    for step in range(num_steps):
-        action = actor_critic.act(Variable(state))
+            if update % save_interval == 0 or update == 1:
+                actor_critic.save(save_path, save_name + '_' + str(update) + '.ckpt')
 
-        next_state, reward, done, _ = envs.step(action.squeeze(1).cpu().data.numpy())
+        actor_critic.save(save_path, save_name + '_done.ckpt')
 
-        reward = torch.FloatTensor(reward).unsqueeze(1)
-        episode_rewards += reward
-        masks = torch.FloatTensor(1-np.array(done)).unsqueeze(1)
-        final_rewards *= masks
-        final_rewards += (1-masks) * episode_rewards
-        episode_rewards *= masks
-
-        if USE_CUDA:
-            masks = masks.cuda()
-
-        state = torch.FloatTensor(np.float32(next_state))
-        rollout.insert(step, state, action.data, reward, masks)
-
-
-    _, next_value = actor_critic(Variable(rollout.states[-1], volatile=True))
-    next_value = next_value.data
-
-    returns = rollout.compute_returns(next_value, gamma)
-
-    logit, action_log_probs, values, entropy = actor_critic.evaluate_actions(
-        Variable(rollout.states[:-1]).view(-1, *state_shape),
-        Variable(rollout.actions).view(-1, 1)
-    )
-
-    values = values.view(num_steps, num_envs, 1)
-    action_log_probs = action_log_probs.view(num_steps, num_envs, 1)
-    advantages = Variable(returns) - values
-
-    value_loss = advantages.pow(2).mean()
-    action_loss = -(Variable(advantages.data) * action_log_probs).mean()
-
-    optimizer.zero_grad()
-    loss = value_loss * value_loss_coef + action_loss - entropy * entropy_coef
-    loss.backward()
-    nn.utils.clip_grad_norm(actor_critic.parameters(), max_grad_norm)
-    optimizer.step()
-
-    if i_update % 100 == 0:
-        all_rewards.append(final_rewards.mean())
-        all_losses.append(loss.data[0])
-
-        print('Epoch %i, Reward: %.3f' % (i_update,
-            np.mean(all_rewards[-10:])))
-
-        #plt.figure(figsize=(20,5))
-        #plt.subplot(131)
-        #plt.title('epoch %s. reward: %s' % (i_update, np.mean(all_rewards[-10:])))
-        #plt.plot(all_rewards)
-        #plt.subplot(132)
-        #plt.title('loss %s' % all_losses[-1])
-        #plt.plot(all_losses)
-        #plt.show()
-
-    rollout.after_update()
-
-
-torch.save(actor_critic.state_dict(), "actor_critic_" + mode)

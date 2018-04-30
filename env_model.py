@@ -1,19 +1,12 @@
+import os
+import tensorflow as tf
+import tensorflow.contrib.slim as slim
+from common.minipacman import MiniPacman
+from a2c import get_actor_critic
+from common.multiprocessing_env import SubprocVecEnv
 import numpy as np
 
-import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.autograd as autograd
-import torch.nn.functional as F
-
-from common.actor_critic import ActorCritic
-from common.multiprocessing_env import SubprocVecEnv
-from common.minipacman import MiniPacman
-import os
 os.environ["CUDA_VISIBLE_DEVICES"]="1"
-
-USE_CUDA = torch.cuda.is_available()
-Variable = lambda *args, **kwargs: autograd.Variable(*args, **kwargs).cuda() if USE_CUDA else autograd.Variable(*args, **kwargs)
 
 #7 different pixels in MiniPacman
 pixels = (
@@ -24,6 +17,7 @@ pixels = (
     (1.0, 1.0, 0.0),
     (0.0, 0.0, 0.0),
     (1.0, 0.0, 0.0),
+    (1.0, 0.0, 1.0),
 )
 pixel_to_categorical = {pix:i for i, pix in enumerate(pixels)}
 num_pixels = len(pixels)
@@ -57,196 +51,164 @@ def rewards_to_target(mode, rewards):
         target.append(reward_to_categorical[mode][reward])
     return target
 
-
-class BasicBlock(nn.Module):
-    def __init__(self, in_shape, n1, n2, n3):
-        super(BasicBlock, self).__init__()
-
-        self.in_shape = in_shape
-        self.n1 = n1
-        self.n2 = n2
-        self.n3 = n3
-
-        self.maxpool = nn.MaxPool2d(kernel_size=in_shape[1:])
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(in_shape[0] * 2, n1, kernel_size=1, stride=2, padding=6),
-            nn.ReLU(),
-            nn.Conv2d(n1, n1, kernel_size=10, stride=1, padding=(5, 6)),
-            nn.ReLU(),
-        )
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(in_shape[0] * 2, n2, kernel_size=1),
-            nn.ReLU(),
-            nn.Conv2d(n2, n2, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-        )
-        self.conv3 = nn.Sequential(
-            nn.Conv2d(n1 + n2,  n3, kernel_size=1),
-            nn.ReLU()
-        )
-
-    def forward(self, inputs):
-        x = self.pool_and_inject(inputs)
-        x = torch.cat([self.conv1(x), self.conv2(x)], 1)
-        x = self.conv3(x)
-        x = torch.cat([x, inputs], 1)
-        return x
-
-    def pool_and_inject(self, x):
-        pooled     = self.maxpool(x)
-        tiled      = pooled.expand((x.size(0),) + self.in_shape)
-        out        = torch.cat([tiled, x], 1)
-        return out
+def pool_inject(X, batch_size, depth, width, height):
+    m = slim.max_pool2d(X, kernel_size=(width, height))
+    tiled = tf.tile(m, (1, width, height, 1))
+    return tf.concat([tiled, X], axis=-1)
 
 
-class EnvModel(nn.Module):
-    def __init__(self, in_shape, num_pixels, num_rewards):
-        super(EnvModel, self).__init__()
+def basic_block(X, batch_size, depth, width, height, n1, n2, n3):
+    with tf.variable_scope('pool_inject'):
+        p = pool_inject(X, batch_size, depth, width, height)
 
-        width  = in_shape[1]
-        height = in_shape[2]
+    with tf.variable_scope('part_1_block'):
+        # Padding was 6 here
+        p_padded = tf.pad(p, [[0, 0], [6, 6], [6, 6], [0, 0]])
+        p_1_c1 = slim.conv2d(p_padded, n1, kernel_size=1,
+                stride=2, padding='valid', activation_fn=tf.nn.relu)
 
-        self.conv = nn.Sequential(
-            nn.Conv2d(8, 64, kernel_size=1),
-            nn.ReLU()
-        )
+        # Padding was 5, 6
+        p_1_c1 = tf.pad(p_1_c1, [[0,0], [5, 5], [6, 6], [0, 0]])
+        p_1_c2 = slim.conv2d(p_1_c1, n1, kernel_size=10, stride=1,
+                padding='valid', activation_fn=tf.nn.relu)
 
-        self.basic_block1 = BasicBlock((64, width, height), 16, 32, 64)
-        self.basic_block2 = BasicBlock((128, width, height), 16, 32, 64)
+    with tf.variable_scope('part_2_block'):
+        p_2_c1 = slim.conv2d(p, n2, kernel_size=1,
+                activation_fn=tf.nn.relu)
 
-        self.image_conv = nn.Sequential(
-            nn.Conv2d(192, 256, kernel_size=1),
-            nn.ReLU()
-        )
-        self.image_fc = nn.Linear(256, num_pixels)
+        p_2_c1 = tf.pad(p_2_c1, [[0,0],[1,1],[1,1],[0,0]])
+        p_2_c2 = slim.conv2d(p_2_c1, n2, kernel_size=3, stride=1,
+                padding='valid', activation_fn=tf.nn.relu)
 
-        self.reward_conv = nn.Sequential(
-            nn.Conv2d(192, 64, kernel_size=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=1),
-            nn.ReLU()
-        )
-        self.reward_fc    = nn.Linear(64 * width * height, num_rewards)
+    with tf.variable_scope('combine_parts'):
+        combined = tf.concat([p_1_c2, p_2_c2], axis=-1)
 
-    def forward(self, inputs):
-        batch_size = inputs.size(0)
+        c = slim.conv2d(combined, n3, kernel_size=1,
+                activation_fn=tf.nn.relu)
 
-        x = self.conv(inputs)
-        x = self.basic_block1(x)
-        x = self.basic_block2(x)
-
-        image = self.image_conv(x)
-        image = image.permute(0, 2, 3, 1).contiguous().view(-1, 256)
-        image = self.image_fc(image)
-
-        reward = self.reward_conv(x)
-        reward = reward.view(batch_size, -1)
-        reward = self.reward_fc(reward)
-
-        return image, reward
+    return tf.concat([c, X], axis=-1)
 
 
-mode = "regular"
-num_envs = 16
+def env_model(obs_shape, batch_size, num_pixels, num_rewards, reward_coeff=0.1):
+    width = obs_shape[0]
+    height = obs_shape[1]
+    depth = obs_shape[2]
+
+    states = tf.placeholder(tf.float32, [None, width, height, depth])
+    onehot_actions = tf.placeholder(tf.float32, [None, width,
+        height, num_actions])
+
+    target_states = tf.placeholder(tf.uint8, [batch_size * width * height])
+    target_rewards = tf.placeholder(tf.uint8, [batch_size])
+
+    #target_states = tf.placeholder(tf.float32, [None, width, height, depth])
+
+    inputs = tf.concat([states, onehot_actions], axis=-1)
+
+    with tf.variable_scope('pre_conv'):
+        c = slim.conv2d(inputs, 64, kernel_size=1, activation_fn=tf.nn.relu)
+
+    with tf.variable_scope('basic_block_1'):
+        bb1 = basic_block(c, batch_size, 64, width, height, 16, 32, 64)
+
+    with tf.variable_scope('basic_block_2'):
+        bb2 = basic_block(bb1, batch_size, 128, width, height, 16, 32, 64)
+
+    with tf.variable_scope('image_conver'):
+        image = slim.conv2d(bb2, 256, kernel_size=1, activation_fn=tf.nn.relu)
+        image = tf.reshape(image, [batch_size * width * height, 256])
+        image = slim.fully_connected(image, num_pixels)
+
+    with tf.variable_scope('reward'):
+        reward = slim.conv2d(bb2, 64, kernel_size=1,
+                activation_fn=tf.nn.relu)
+        reward = slim.conv2d(reward, 64, kernel_size=1, activation_fn=tf.nn.relu)
+
+        reward = tf.reshape(reward, [batch_size, width * height * 64])
+
+        reward = slim.fully_connected(reward, num_rewards)
+
+    target_states_one_hot = tf.one_hot(target_states, depth=num_pixels)
+    image_loss = tf.losses.softmax_cross_entropy(target_states_one_hot, image)
+
+    target_reward_one_hot = tf.one_hot(target_rewards, depth=num_rewards)
+    reward_loss = tf.losses.softmax_cross_entropy(target_reward_one_hot, reward)
+
+    loss = image_loss + (reward_coeff * reward_loss)
+
+    opt = tf.train.AdamOptimizer().minimize(loss)
+
+    return image, reward, states, onehot_actions, loss, target_states, target_rewards
+
+
+nenvs = 16
+nsteps = 5
 
 def make_env():
     def _thunk():
-        env = MiniPacman(mode, 1000)
+        env = MiniPacman('regular', 1000)
         return env
 
     return _thunk
 
-envs = [make_env() for i in range(num_envs)]
+envs = [make_env() for i in range(nenvs)]
 envs = SubprocVecEnv(envs)
 
-state_shape = envs.observation_space.shape
+env = MiniPacman('regular', 1000)
+ob_space = env.observation_space.shape
+ac_space = env.action_space
 num_actions = envs.action_space.n
-
-env_model    = EnvModel(envs.observation_space.shape, num_pixels, len(mode_rewards["regular"]))
-actor_critic = ActorCritic(envs.observation_space.shape, envs.action_space.n)
-
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(env_model.parameters())
-
-if USE_CUDA:
-    env_model    = env_model.cuda()
-    actor_critic = actor_critic.cuda()
-
-actor_critic.load_state_dict(torch.load("weights/actor_critic_" + mode))
-
-def get_action(state):
-    if state.ndim == 4:
-        state = torch.FloatTensor(np.float32(state))
-    else:
-        state = torch.FloatTensor(np.float32(state)).unsqueeze(0)
-
-    action = actor_critic.act(Variable(state, volatile=True))
-    action = action.data.cpu().numpy()
-    return action
 
 def play_games(envs, frames):
     states = envs.reset()
 
     for frame_idx in range(frames):
-        actions = get_action(states)
+        tmp_states = states.transpose(0, 2, 1, 3)
+        actions, _, _ = actor_critic.act(tmp_states)
+
         next_states, rewards, dones, _ = envs.step(actions)
 
         yield frame_idx, states, actions, rewards, next_states, dones
 
         states = next_states
 
-reward_coef = 0.1
-num_updates = 5000
 
-losses = []
-all_rewards = []
+with tf.Session() as sess:
+    actor_critic = get_actor_critic(sess, nenvs, nsteps, [ob_space[1], ob_space[0],
+        ob_space[2]], ac_space)
+    actor_critic.load('weights/model_1.ckpt')
 
-for frame_idx, states, actions, rewards, next_states, dones in play_games(envs, num_updates):
-    # States is the pixel values of the scene
-    states      = torch.FloatTensor(states)
-    # Actions is the numerical index of which action was taken
-    actions     = torch.LongTensor(actions)
+    imag_state, imag_reward, input_states, input_actions, loss, target_states, target_rewards = env_model(ob_space, nenvs, num_pixels, len(mode_rewards['regular']))
+    sess.run(tf.global_variables_initializer())
 
-    # Notice that states will be for a number of environments. This corresponds
-    # to the batch size.
+    reward_coef = 0.1
+    num_updates = 5000
 
-    batch_size = states.size(0)
+    losses = []
+    all_rewards = []
 
-    onehot_actions = torch.zeros(batch_size, num_actions, *state_shape[1:])
-    onehot_actions[range(batch_size), actions] = 1
-    # Concatenate to form a input vector of size [32, 3, 15, 19]
-    inputs = Variable(torch.cat([states, onehot_actions], 1))
+    width = ob_space[0]
+    height = ob_space[1]
+    depth = ob_space[2]
 
-    if USE_CUDA:
-        inputs = inputs.cuda()
+    for frame_idx, states, actions, rewards, next_states, dones in play_games(envs, num_updates):
+        target_state = pix_to_target(next_states)
+        target_reward = rewards_to_target('regular', rewards)
 
-    imagined_state, imagined_reward = env_model(inputs)
+        onehot_actions = np.zeros((nenvs, num_actions, width, height))
+        onehot_actions[range(nenvs), actions] = 1
+        # Change so actions are the 'depth of the image' as tf expects
+        onehot_actions = onehot_actions.transpose(0, 2, 3, 1)
 
-    target_state = pix_to_target(next_states)
-    target_state = Variable(torch.LongTensor(target_state))
+        s, r, l = sess.run([imag_state, imag_reward, loss], feed_dict={
+                input_states: states,
+                input_actions: onehot_actions,
+                target_states: target_state,
+                target_rewards: target_reward
+            })
 
-    target_reward = rewards_to_target(mode, rewards)
-    target_reward = Variable(torch.LongTensor(target_reward))
+        raise ValueError()
 
-    optimizer.zero_grad()
-    # Just get the loss between the imagined image and the sequentially next
-    # image
-    print('imag shape', imagined_state.shape)
-    print('target shape', target_state.shape)
-    raise ValueError()
-    image_loss  = criterion(imagined_state, target_state)
-    # Get the loss between the actual reward and the predicted reward
-    reward_loss = criterion(imagined_reward, target_reward)
-    loss = image_loss + reward_coef * reward_loss
-    loss.backward()
-    optimizer.step()
 
-    losses.append(loss.data[0])
-    all_rewards.append(np.mean(rewards))
-
-    print('Epoch %i, Reward %.5f, Loss %.5f' % (frame_idx,
-        np.mean(all_rewards[-10:]), np.mean(losses[-10:])))
-
-torch.save(env_model.state_dict(), "env_model_" + mode)
 
 

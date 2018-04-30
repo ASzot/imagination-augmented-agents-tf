@@ -1,1 +1,3 @@
-i2a_regular_*
+weights
+logs
+__pycache__
