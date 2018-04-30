@@ -28,7 +28,7 @@ class OnPolicy(nn.Module):
     def forward(self, x):
         raise NotImplementedError
 
-    def act(self, x, deterministic=False):
+    def act(self, x, deterministic=True):
         logit, value = self.forward(x)
         probs = F.softmax(logit)
 

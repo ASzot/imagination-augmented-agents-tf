@@ -9,6 +9,8 @@ import torch.nn.functional as F
 from common.actor_critic import ActorCritic
 from common.multiprocessing_env import SubprocVecEnv
 from common.minipacman import MiniPacman
+import os
+os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
 USE_CUDA = torch.cuda.is_available()
 Variable = lambda *args, **kwargs: autograd.Variable(*args, **kwargs).cuda() if USE_CUDA else autograd.Variable(*args, **kwargs)
@@ -170,7 +172,7 @@ if USE_CUDA:
     env_model    = env_model.cuda()
     actor_critic = actor_critic.cuda()
 
-actor_critic.load_state_dict(torch.load("actor_critic_" + mode))
+actor_critic.load_state_dict(torch.load("weights/actor_critic_" + mode))
 
 def get_action(state):
     if state.ndim == 4:
@@ -179,7 +181,7 @@ def get_action(state):
         state = torch.FloatTensor(np.float32(state)).unsqueeze(0)
 
     action = actor_critic.act(Variable(state, volatile=True))
-    action = action.data.cpu().squeeze(1).numpy()
+    action = action.data.cpu().numpy()
     return action
 
 def play_games(envs, frames):
@@ -229,6 +231,9 @@ for frame_idx, states, actions, rewards, next_states, dones in play_games(envs, 
     optimizer.zero_grad()
     # Just get the loss between the imagined image and the sequentially next
     # image
+    print('imag shape', imagined_state.shape)
+    print('target shape', target_state.shape)
+    raise ValueError()
     image_loss  = criterion(imagined_state, target_state)
     # Get the loss between the actual reward and the predicted reward
     reward_loss = criterion(imagined_reward, target_reward)
