@@ -85,7 +85,7 @@ class CnnPolicy(object):
         return X
 
     def get_inputs(self):
-        return self.X
+        return [self.X]
 
 
 class ActorCritic(object):
@@ -159,8 +159,10 @@ class ActorCritic(object):
             self.rewards: rewards
         }
 
+        inputs = self.train_model.get_inputs()
         mapped_input = self.train_model.transform_input(obs)
-        for
+        for transformed_input, inp in zip(mapped_input, inputs):
+            feed_dict[inp] = transformed_input
 
         loss, policy_loss, value_loss, policy_entropy, _, summary = self.sess.run([
                 self.loss,
@@ -170,9 +172,7 @@ class ActorCritic(object):
                 self.opt,
                 self.summary_op
             ],
-            feed_dict = {
-                self.train_model.X: self.train_model.get_input(obs),
-            }
+            feed_dict = feed_dict
         )
 
         self.writer.add_summary(summary, step)
@@ -194,32 +194,28 @@ class ActorCritic(object):
         self.saver.restore(self.sess, full_path)
 
 
-def get_actor_critic(sess, nenvs, nsteps, ob_space, ac_space):
+def get_actor_critic(sess, nenvs, nsteps, ob_space, ac_space,
+        policy):
     vf_coef=0.5
     ent_coef=0.01
     max_grad_norm=0.5
     lr=7e-4
     epsilon=1e-5
     alpha=0.99
-    actor_critic = ActorCritic(sess, CnnPolicy, ob_space, ac_space, nenvs, nsteps,
+    actor_critic = ActorCritic(sess, policy, ob_space, ac_space, nenvs, nsteps,
             ent_coef, vf_coef, max_grad_norm, lr, alpha, epsilon)
 
     return actor_critic
 
-if __name__ == '__main__':
-    os.environ["CUDA_VISIBLE_DEVICES"]="0"
+
+def train(policy, save_name, load_path=None):
     nenvs = 16
     nsteps=5
     total_timesteps=int(1e6)
     gamma=0.99
     log_interval=100
     save_interval = 1e5
-    save_name = 'model'
     save_path = 'weights'
-
-    load_count = 100000
-    load_path = 'weights/model_%i.ckpt' % load_count
-    #load_path = None
 
     def make_env():
         def _thunk():
@@ -238,7 +234,7 @@ if __name__ == '__main__':
     obs = envs.reset()
 
     with tf.Session() as sess:
-        actor_critic = get_actor_critic(sess, nenvs, nsteps, ob_space, ac_space)
+        actor_critic = get_actor_critic(sess, policy, nenvs, nsteps, ob_space, ac_space)
         if load_path is not None:
             actor_critic.load(load_path)
             print('Loaded a2c')
@@ -314,4 +310,15 @@ if __name__ == '__main__':
                 actor_critic.save(save_path, save_name + '_' + str(update) + '.ckpt')
 
         actor_critic.save(save_path, save_name + '_done.ckpt')
+
+
+if __name__ == '__main__':
+    os.environ["CUDA_VISIBLE_DEVICES"]="0"
+
+    load_count = 100000
+    load_path = 'weights/model_%i.ckpt' % load_count
+    load_path = None
+
+    train(CnnPolicy, 'a2c', load_path)
+
 

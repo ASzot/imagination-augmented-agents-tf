@@ -10,8 +10,9 @@ import tensorflow.contrib.slim as slim
 from tqdm import tqdm
 
 from env_model import create_env_model
-from a2c import get_actor_critic
+from a2c import get_actor_critic, train
 from pacman_util import num_pixels, mode_rewards, pix_to_target, rewards_to_target, task_rewards
+
 
 def softmax(X, theta = 1.0, axis = None):
     """
@@ -121,6 +122,7 @@ class ImaginationCore(object):
 
         return rollout_state, rollout_rewards
 
+
 g_actor_critic = None
 def get_cache_loaded_a2c(sess, nenvs, nsteps, ob_space, ac_space):
     global g_actor_critic
@@ -168,7 +170,6 @@ def get_encoder(state, reward, num_steps, batch_size, width, height, depth, hidd
 class I2aPolicy(object):
     def __init__(self, sess, ob_shape, ac_space, nbatch, nsteps, reuse=False):
         hidden_size = 256
-
         nsteps = 5
 
         num_rewards = len(task_rewards['regular'])
@@ -183,16 +184,14 @@ class I2aPolicy(object):
         self.imagination = ImaginationCore(1, num_actions, num_rewards,
                 ob_space, actor_critic, env_model)
 
-
         self.state = tf.placeholder(tf.float32, [None, None, width, height, depth])
         self.reward = tf.placeholder(tf.float32, [None, None, num_rewards])
 
         num_steps = tf.shape(state)[0]
         batch_size = tf.shape(state)[1]
-        hidden_state = get_encoder(state, reward, num_steps, batch_size, width, height, depth, hidden_size)
+        hidden_state = get_encoder(self.state, self.reward, num_steps, batch_size, width, height, depth, hidden_size)
 
         hidden_state = tf.reshape(hidden_state, [batch_size, None])
-
 
         c1 = slim.conv2d(state, 16, kernel_size=3, stride=1, activation_fn=tf.nn.relu)
         c2 = slim.conv2d(c1, 16, kernel_size=3, stride=2, activation_fn=tf.nn.relu)
@@ -202,58 +201,38 @@ class I2aPolicy(object):
         x = tf.concat([features, hidden_state], axis=1)
         x = slim.fully_connected(x, 256, activation_fn=tf.nn.relu)
 
-        pi = slim.fully_connected(x, 1)
-        vf = slim.fully_connected(x, num_actions)
+        self.pi = slim.fully_connected(x, 1)
+        self.vf = slim.fully_connected(x, num_actions)
+
+        # Sample action. `pi` is like the logits
+        u = tf.random_uniform(tf.shape(self.pi))
+        self.a0 = tf.argmax(self.pi - tf.log(-tf.log(u)), axis=-1)
+
+        # Get the negative log likelihood
+        one_hot_actions = tf.one_hot(self.a0, self.pi.get_shape().as_list()[-1])
+        self.neglogp0 = tf.nn.softmax_cross_entropy_with_logits(
+            logits=self.pi,
+            labels=one_hot_actions)
+
+
+    def step(self, sess, ob):
+        a, v, neglogp = sess.run([self.a0, self.vf, self.neglogp0], {self.X:ob})
+        return a, v, neglogp
+
+    def value(self, sess, ob):
+        return sess.run(self.vf, {self.X:ob})
+
+    def get_inputs(self):
+        return [self.state, self.reward]
+
+    def transform_input(self, X):
+        return self.imagination(X)
 
 
 
-    def run(self, state, sess):
-        imagined_state, imagined_reward = self.imagination(state)
-
-        hidden_state = sess.run([self.internal_state], feed_dict={
-            self.state: imagined_state,
-            self.reward: imagined_reward
-            })
-
-
-
-
-
-def make_env():
-    def _thunk():
-        env = MiniPacman('regular', 1000)
-        return env
-
-    return _thunk
-
-nenvs = 16
-nsteps = 5
-
-envs = [make_env() for i in range(nenvs)]
-envs = SubprocVecEnv(envs)
-
-ob_space = envs.observation_space.shape
-ac_space = envs.action_space
-num_actions = envs.action_space.n
-
-from tensorflow.python.tools import inspect_checkpoint as chkp
-
-#print(chkp.print_tensors_in_checkpoint_file("./weights/model_100000.ckpt",
-#        tensor_name='',
-#        all_tensors=True))
-#raise ValueError()
-
-
-
-os.environ["CUDA_VISIBLE_DEVICES"]="0"
-
-with tf.Session() as sess:
-
-
-
-    # add a whole new environment model to the graph.
-
-
+if __name__ == '__main__':
+    os.environ["CUDA_VISIBLE_DEVICES"]="0"
+    train(I2aPolicy, 'i2a')
 
 
 
