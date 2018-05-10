@@ -18,7 +18,7 @@ class ImaginationCore(object):
         self.in_shape      = in_shape
         self.num_actions   = num_actions
         self.num_rewards   = num_rewards
-        self.env_model     = torch.nn.DataParallel(env_model, device_ids=[0,1,2]).cuda()
+        self.env_model     = env_model
         self.distil_policy = distil_policy
         self.full_rollout  = full_rollout
 

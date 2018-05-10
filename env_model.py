@@ -6,50 +6,8 @@ from a2c import get_actor_critic
 from common.multiprocessing_env import SubprocVecEnv
 import numpy as np
 
-os.environ["CUDA_VISIBLE_DEVICES"]="1"
+from pacman_util import num_pixels, mode_rewards, pix_to_target, rewards_to_target
 
-#7 different pixels in MiniPacman
-pixels = (
-    (0.0, 1.0, 1.0),
-    (0.0, 1.0, 0.0),
-    (0.0, 0.0, 1.0),
-    (1.0, 1.0, 1.0),
-    (1.0, 1.0, 0.0),
-    (0.0, 0.0, 0.0),
-    (1.0, 0.0, 0.0),
-    (1.0, 0.0, 1.0),
-)
-pixel_to_categorical = {pix:i for i, pix in enumerate(pixels)}
-num_pixels = len(pixels)
-
-#For each mode in MiniPacman there are different rewards
-mode_rewards = {
-    "regular": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-    "avoid":   [0.1, -0.1, -5, -10, -20],
-    "hunt":    [0, 1, 10, -20],
-    "ambush":  [0, -0.1, 10, -20],
-    "rush":    [0, -0.1, 9.9]
-}
-reward_to_categorical = {mode: {reward:i for i, reward in enumerate(mode_rewards[mode])} for mode in mode_rewards.keys()}
-
-def pix_to_target(next_states):
-    target = []
-    for pixel in next_states.transpose(0, 2, 3, 1).reshape(-1, 3):
-        target.append(pixel_to_categorical[tuple([np.ceil(pixel[0]), np.ceil(pixel[1]), np.ceil(pixel[2])])])
-    return target
-
-def target_to_pix(imagined_states):
-    pixels = []
-    to_pixel = {value: key for key, value in pixel_to_categorical.items()}
-    for target in imagined_states:
-        pixels.append(list(to_pixel[target]))
-    return np.array(pixels)
-
-def rewards_to_target(mode, rewards):
-    target = []
-    for reward in rewards:
-        target.append(reward_to_categorical[mode][reward])
-    return target
 
 def pool_inject(X, batch_size, depth, width, height):
     m = slim.max_pool2d(X, kernel_size=(width, height))
@@ -89,19 +47,19 @@ def basic_block(X, batch_size, depth, width, height, n1, n2, n3):
     return tf.concat([c, X], axis=-1)
 
 
-def env_model(obs_shape, batch_size, num_pixels, num_rewards, reward_coeff=0.1):
+def create_env_model(obs_shape, batch_size, num_actions, num_pixels, num_rewards,
+        reward_coeff=0.1):
     width = obs_shape[0]
     height = obs_shape[1]
     depth = obs_shape[2]
 
     states = tf.placeholder(tf.float32, [None, width, height, depth])
+
     onehot_actions = tf.placeholder(tf.float32, [None, width,
         height, num_actions])
 
     target_states = tf.placeholder(tf.uint8, [batch_size * width * height])
     target_rewards = tf.placeholder(tf.uint8, [batch_size])
-
-    #target_states = tf.placeholder(tf.float32, [None, width, height, depth])
 
     inputs = tf.concat([states, onehot_actions], axis=-1)
 
@@ -138,11 +96,9 @@ def env_model(obs_shape, batch_size, num_pixels, num_rewards, reward_coeff=0.1):
 
     opt = tf.train.AdamOptimizer().minimize(loss)
 
-    return image, reward, states, onehot_actions, loss, target_states, target_rewards
+    return EnvModelData(image, reward, states, onehot_actions, loss,
+            target_states, target_rewards, opt)
 
-
-nenvs = 16
-nsteps = 5
 
 def make_env():
     def _thunk():
@@ -150,14 +106,6 @@ def make_env():
         return env
 
     return _thunk
-
-envs = [make_env() for i in range(nenvs)]
-envs = SubprocVecEnv(envs)
-
-env = MiniPacman('regular', 1000)
-ob_space = env.observation_space.shape
-ac_space = env.action_space
-num_actions = envs.action_space.n
 
 def play_games(envs, frames):
     states = envs.reset()
@@ -173,42 +121,71 @@ def play_games(envs, frames):
         states = next_states
 
 
-with tf.Session() as sess:
-    actor_critic = get_actor_critic(sess, nenvs, nsteps, [ob_space[1], ob_space[0],
-        ob_space[2]], ac_space)
-    actor_critic.load('weights/model_1.ckpt')
-
-    imag_state, imag_reward, input_states, input_actions, loss, target_states, target_rewards = env_model(ob_space, nenvs, num_pixels, len(mode_rewards['regular']))
-    sess.run(tf.global_variables_initializer())
-
-    reward_coef = 0.1
-    num_updates = 5000
-
-    losses = []
-    all_rewards = []
-
-    width = ob_space[0]
-    height = ob_space[1]
-    depth = ob_space[2]
-
-    for frame_idx, states, actions, rewards, next_states, dones in play_games(envs, num_updates):
-        target_state = pix_to_target(next_states)
-        target_reward = rewards_to_target('regular', rewards)
-
-        onehot_actions = np.zeros((nenvs, num_actions, width, height))
-        onehot_actions[range(nenvs), actions] = 1
-        # Change so actions are the 'depth of the image' as tf expects
-        onehot_actions = onehot_actions.transpose(0, 2, 3, 1)
-
-        s, r, l = sess.run([imag_state, imag_reward, loss], feed_dict={
-                input_states: states,
-                input_actions: onehot_actions,
-                target_states: target_state,
-                target_rewards: target_reward
-            })
-
-        raise ValueError()
+class EnvModelData(object):
+    def __init__(self, imag_state, imag_reward, input_states, input_actions,
+            loss, target_states, target_rewards, opt):
+        self.imag_state       = imag_state
+        self.imag_reward      = imag_reward
+        self.input_states     = input_states
+        self.input_actions    = input_actions
+        self.loss             = loss
+        self.target_states    = target_states
+        self.target_rewards   = target_rewards
+        self.opt              = opt
 
 
+if __name__ == '__main__':
+    nenvs = 16
+    nsteps = 5
 
+    envs = [make_env() for i in range(nenvs)]
+    envs = SubprocVecEnv(envs)
+
+    ob_space = envs.observation_space.shape
+    ac_space = envs.action_space
+    num_actions = envs.action_space.n
+
+    os.environ["CUDA_VISIBLE_DEVICES"]="1"
+    with tf.Session() as sess:
+        actor_critic = get_actor_critic(sess, nenvs, nsteps, [ob_space[1], ob_space[0],
+            ob_space[2]], ac_space)
+        actor_critic.load('weights/model_100000.ckpt')
+
+        with tf.variable_scope('env_model'):
+            env_model = create_env_model(ob_space, nenvs, num_actions, num_pixels, len(mode_rewards['regular']))
+
+        sess.run(tf.global_variables_initializer())
+
+        num_updates = 5000
+
+        losses = []
+        all_rewards = []
+
+        width = ob_space[0]
+        height = ob_space[1]
+        depth = ob_space[2]
+
+        save_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='env_model')
+        saver = tf.train.Saver(var_list=save_vars)
+
+        for frame_idx, states, actions, rewards, next_states, dones in play_games(envs, num_updates):
+            target_state = pix_to_target(next_states)
+            target_reward = rewards_to_target('regular', rewards)
+
+            onehot_actions = np.zeros((nenvs, num_actions, width, height))
+            onehot_actions[range(nenvs), actions] = 1
+            # Change so actions are the 'depth of the image' as tf expects
+            onehot_actions = onehot_actions.transpose(0, 2, 3, 1)
+
+            s, r, l, _ = sess.run([env_model.imag_state, env_model.imag_reward,
+                env_model.loss, env_model.opt], feed_dict={
+                    env_model.input_states: states,
+                    env_model.input_actions: onehot_actions,
+                    env_model.target_states: target_state,
+                    env_model.target_rewards: target_reward
+                })
+
+            print('%i) %.5f' % (frame_idx, l))
+
+        saver.save(sess, 'weights/env_model.ckpt')
 

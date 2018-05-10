@@ -28,9 +28,9 @@ def cat_entropy(logits):
 
 class CnnPolicy(object):
     def __init__(self, sess, ob_space, ac_space, nbatch, nsteps, reuse=False):
-        nh, nw, nc = ob_space
+        nw, nh, nc = ob_space
 
-        ob_shape = (nbatch, nh, nw, nc)
+        ob_shape = (nbatch, nw, nh, nc)
         nact = ac_space.n
         X = tf.placeholder(tf.float32, ob_shape) #obs
         with tf.variable_scope("model", reuse=reuse):
@@ -81,6 +81,13 @@ class CnnPolicy(object):
         return sess.run(self.vf, {self.X:ob})
 
 
+    def transform_input(self, X):
+        return X
+
+    def get_inputs(self):
+        return self.X
+
+
 class ActorCritic(object):
     def __init__(self, sess, policy, ob_space, ac_space, nenvs, nsteps,
         ent_coef, vf_coef, max_grad_norm, lr, alpha, epsilon, logs_path='./logs/'):
@@ -118,7 +125,6 @@ class ActorCritic(object):
 
         trainer = tf.train.RMSPropOptimizer(learning_rate=lr, decay=alpha, epsilon=epsilon)
         self.opt = trainer.apply_gradients(grads)
-        self.saver = tf.train.Saver(max_to_keep=15)
 
         # Tensorboard
         tf.summary.scalar('Loss', self.loss)
@@ -129,15 +135,44 @@ class ActorCritic(object):
 
         self.writer = tf.summary.FileWriter(logs_path, graph=self.sess.graph)
 
+        name_scope = tf.contrib.framework.get_name_scope()
+
+        def fix_tf_name(name, name_scope=None):
+            if name_scope is not None:
+                name = name[len(name_scope) + 1:]
+            return name.split(':')[0]
+
+        if len(name_scope) != 0:
+            params = {fix_tf_name(v.name, name_scope): v for v in params}
+        else:
+            params = {fix_tf_name(v.name): v for v in params}
+
+        self.saver = tf.train.Saver(params, max_to_keep=15)
+
 
     def train(self, obs, rewards, masks, actions, values, step):
         advs = rewards - values
 
-        loss, policy_loss, value_loss, policy_entropy, _, summary = self.sess.run(
-            [self.loss, self.pg_loss, self.vf_loss, self.entropy, self.opt,
-                self.summary_op],
-            feed_dict= {self.train_model.X: obs, self.actions: actions,
-                self.advantages: advs, self.rewards: rewards}
+        feed_dict = {
+            self.actions: actions,
+            self.advantages: advs,
+            self.rewards: rewards
+        }
+
+        mapped_input = self.train_model.transform_input(obs)
+        for
+
+        loss, policy_loss, value_loss, policy_entropy, _, summary = self.sess.run([
+                self.loss,
+                self.pg_loss,
+                self.vf_loss,
+                self.entropy,
+                self.opt,
+                self.summary_op
+            ],
+            feed_dict = {
+                self.train_model.X: self.train_model.get_input(obs),
+            }
         )
 
         self.writer.add_summary(summary, step)

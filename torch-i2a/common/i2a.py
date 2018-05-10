@@ -54,10 +54,14 @@ class I2A(OnPolicy):
         # This will be a tensor of size
         # [rollout count, # envs (batch size) * actions, *state space]
         imagined_state, imagined_reward = self.imagination(state.data)
+        self.imagined_state = imagined_state
+        self.imagined_reward = imagined_reward
 
         hidden = self.encoder(Variable(imagined_state), Variable(imagined_reward))
         # Get encoded representation of each state
         hidden = hidden.view(batch_size, -1)
+
+        self.encoded_repr = hidden
 
         # Extract features from state
         state = self.features(state)
