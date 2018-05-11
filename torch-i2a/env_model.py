@@ -231,9 +231,6 @@ for frame_idx, states, actions, rewards, next_states, dones in play_games(envs, 
     optimizer.zero_grad()
     # Just get the loss between the imagined image and the sequentially next
     # image
-    print('imag shape', imagined_state.shape)
-    print('target shape', target_state.shape)
-    raise ValueError()
     image_loss  = criterion(imagined_state, target_state)
     # Get the loss between the actual reward and the predicted reward
     reward_loss = criterion(imagined_reward, target_reward)

@@ -2,3 +2,5 @@ weights
 logs
 __pycache__
 .ipynb_checkpoints
+env_logs
+a2c_logs

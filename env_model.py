@@ -2,7 +2,7 @@ import os
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
 from common.minipacman import MiniPacman
-from a2c import get_actor_critic
+from a2c import get_actor_critic, CnnPolicy
 from common.multiprocessing_env import SubprocVecEnv
 import numpy as np
 
@@ -47,8 +47,7 @@ def basic_block(X, batch_size, depth, width, height, n1, n2, n3):
     return tf.concat([c, X], axis=-1)
 
 
-def create_env_model(obs_shape, batch_size, num_actions, num_pixels, num_rewards,
-        reward_coeff=0.1):
+def create_env_model(obs_shape, num_actions, num_pixels, num_rewards, reward_coeff=0.1):
     width = obs_shape[0]
     height = obs_shape[1]
     depth = obs_shape[2]
@@ -57,9 +56,12 @@ def create_env_model(obs_shape, batch_size, num_actions, num_pixels, num_rewards
 
     onehot_actions = tf.placeholder(tf.float32, [None, width,
         height, num_actions])
+    print('Number of actions are', num_actions)
 
-    target_states = tf.placeholder(tf.uint8, [batch_size * width * height])
-    target_rewards = tf.placeholder(tf.uint8, [batch_size])
+    batch_size = tf.shape(states)[0]
+
+    target_states = tf.placeholder(tf.uint8, [None])
+    target_rewards = tf.placeholder(tf.uint8, [None])
 
     inputs = tf.concat([states, onehot_actions], axis=-1)
 
@@ -95,6 +97,11 @@ def create_env_model(obs_shape, batch_size, num_actions, num_pixels, num_rewards
     loss = image_loss + (reward_coeff * reward_loss)
 
     opt = tf.train.AdamOptimizer().minimize(loss)
+
+    # Tensorboard
+    tf.summary.scalar('Loss', loss)
+    tf.summary.scalar('Reward Loss', reward_loss)
+    tf.summary.scalar('Image Loss', image_loss)
 
     return EnvModelData(image, reward, states, onehot_actions, loss,
             target_states, target_rewards, opt)
@@ -148,12 +155,13 @@ if __name__ == '__main__':
     os.environ["CUDA_VISIBLE_DEVICES"]="1"
     with tf.Session() as sess:
         actor_critic = get_actor_critic(sess, nenvs, nsteps, [ob_space[1], ob_space[0],
-            ob_space[2]], ac_space)
+            ob_space[2]], ac_space, CnnPolicy, should_summary=False)
         actor_critic.load('weights/model_100000.ckpt')
 
         with tf.variable_scope('env_model'):
-            env_model = create_env_model(ob_space, nenvs, num_actions, num_pixels, len(mode_rewards['regular']))
+            env_model = create_env_model(ob_space, num_actions, num_pixels, len(mode_rewards['regular']))
 
+        summary_op = tf.summary.merge_all()
         sess.run(tf.global_variables_initializer())
 
         num_updates = 5000
@@ -168,6 +176,8 @@ if __name__ == '__main__':
         save_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='env_model')
         saver = tf.train.Saver(var_list=save_vars)
 
+        writer = tf.summary.FileWriter('./env_logs', graph=sess.graph)
+
         for frame_idx, states, actions, rewards, next_states, dones in play_games(envs, num_updates):
             target_state = pix_to_target(next_states)
             target_reward = rewards_to_target('regular', rewards)
@@ -177,8 +187,8 @@ if __name__ == '__main__':
             # Change so actions are the 'depth of the image' as tf expects
             onehot_actions = onehot_actions.transpose(0, 2, 3, 1)
 
-            s, r, l, _ = sess.run([env_model.imag_state, env_model.imag_reward,
-                env_model.loss, env_model.opt], feed_dict={
+            s, r, l, summary, _ = sess.run([env_model.imag_state, env_model.imag_reward,
+                env_model.loss, summary_op, env_model.opt], feed_dict={
                     env_model.input_states: states,
                     env_model.input_actions: onehot_actions,
                     env_model.target_states: target_state,
@@ -186,6 +196,8 @@ if __name__ == '__main__':
                 })
 
             print('%i) %.5f' % (frame_idx, l))
+            writer.add_summary(summary, frame_idx)
 
         saver.save(sess, 'weights/env_model.ckpt')
+        print('Environment model saved!')
 

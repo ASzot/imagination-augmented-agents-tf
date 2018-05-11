@@ -16,8 +16,16 @@ from common.rollout_encoder import RolloutEncoder
 from common.imagination_core import ImaginationCore
 from common.i2a import I2A
 
+from common.pacman_util import *
+
 
 SHOULD_LOG = False
+
+USE_CUDA = torch.cuda.is_available()
+
+Variable = lambda *args, **kwargs: autograd.Variable(*args, **kwargs).cuda() if USE_CUDA else autograd.Variable(*args, **kwargs)
+
+
 
 def plog(s, time=''):
     if SHOULD_LOG:
@@ -46,7 +54,7 @@ full_rollout = True
 # Get the env model which is trained to predict the next frame and the reward
 # associated with the current frame
 env_model     = EnvModel(envs.observation_space.shape, num_pixels, num_rewards)
-env_model.load_state_dict(torch.load("env_model_" + mode))
+env_model.load_state_dict(torch.load("weights/env_model_" + mode))
 
 distil_policy = ActorCritic(envs.observation_space.shape, envs.action_space.n)
 distil_optimizer = optim.Adam(distil_policy.parameters())

@@ -30,7 +30,8 @@ class CnnPolicy(object):
     def __init__(self, sess, ob_space, ac_space, nbatch, nsteps, reuse=False):
         nw, nh, nc = ob_space
 
-        ob_shape = (nbatch, nw, nh, nc)
+        # Do not specify the batch size.
+        ob_shape = (None, nw, nh, nc)
         nact = ac_space.n
         X = tf.placeholder(tf.float32, ob_shape) #obs
         with tf.variable_scope("model", reuse=reuse):
@@ -81,8 +82,8 @@ class CnnPolicy(object):
         return sess.run(self.vf, {self.X:ob})
 
 
-    def transform_input(self, X):
-        return X
+    def transform_input(self, X, sess):
+        return [X]
 
     def get_inputs(self):
         return [self.X]
@@ -90,7 +91,7 @@ class CnnPolicy(object):
 
 class ActorCritic(object):
     def __init__(self, sess, policy, ob_space, ac_space, nenvs, nsteps,
-        ent_coef, vf_coef, max_grad_norm, lr, alpha, epsilon, logs_path='./logs/'):
+        ent_coef, vf_coef, max_grad_norm, lr, alpha, epsilon, should_summary):
 
         self.sess = sess
 
@@ -127,13 +128,10 @@ class ActorCritic(object):
         self.opt = trainer.apply_gradients(grads)
 
         # Tensorboard
-        tf.summary.scalar('Loss', self.loss)
-        tf.summary.scalar('Policy gradient loss', self.pg_loss)
-        tf.summary.scalar('Value function loss', self.vf_loss)
-
-        self.summary_op = tf.summary.merge_all()
-
-        self.writer = tf.summary.FileWriter(logs_path, graph=self.sess.graph)
+        if should_summary:
+            tf.summary.scalar('Loss', self.loss)
+            tf.summary.scalar('Policy gradient loss', self.pg_loss)
+            tf.summary.scalar('Value function loss', self.vf_loss)
 
         name_scope = tf.contrib.framework.get_name_scope()
 
@@ -150,7 +148,7 @@ class ActorCritic(object):
         self.saver = tf.train.Saver(params, max_to_keep=15)
 
 
-    def train(self, obs, rewards, masks, actions, values, step):
+    def train(self, obs, rewards, masks, actions, values, step, summary_op):
         advs = rewards - values
 
         feed_dict = {
@@ -160,7 +158,7 @@ class ActorCritic(object):
         }
 
         inputs = self.train_model.get_inputs()
-        mapped_input = self.train_model.transform_input(obs)
+        mapped_input = self.train_model.transform_input(obs, self.sess)
         for transformed_input, inp in zip(mapped_input, inputs):
             feed_dict[inp] = transformed_input
 
@@ -170,14 +168,12 @@ class ActorCritic(object):
                 self.vf_loss,
                 self.entropy,
                 self.opt,
-                self.summary_op
+                summary_op
             ],
             feed_dict = feed_dict
         )
 
-        self.writer.add_summary(summary, step)
-
-        return loss, policy_loss, value_loss, policy_entropy
+        return loss, policy_loss, value_loss, policy_entropy, summary
 
     def act(self, obs):
         return self.step_model.step(self.sess, obs)
@@ -195,7 +191,7 @@ class ActorCritic(object):
 
 
 def get_actor_critic(sess, nenvs, nsteps, ob_space, ac_space,
-        policy):
+        policy, should_summary=True):
     vf_coef=0.5
     ent_coef=0.01
     max_grad_norm=0.5
@@ -203,12 +199,13 @@ def get_actor_critic(sess, nenvs, nsteps, ob_space, ac_space,
     epsilon=1e-5
     alpha=0.99
     actor_critic = ActorCritic(sess, policy, ob_space, ac_space, nenvs, nsteps,
-            ent_coef, vf_coef, max_grad_norm, lr, alpha, epsilon)
+            ent_coef, vf_coef, max_grad_norm, lr, alpha, epsilon,
+            should_summary)
 
     return actor_critic
 
 
-def train(policy, save_name, load_path=None):
+def train(policy, save_name, load_count = 0, load_path=None):
     nenvs = 16
     nsteps=5
     total_timesteps=int(1e6)
@@ -234,10 +231,14 @@ def train(policy, save_name, load_path=None):
     obs = envs.reset()
 
     with tf.Session() as sess:
-        actor_critic = get_actor_critic(sess, policy, nenvs, nsteps, ob_space, ac_space)
+        actor_critic = get_actor_critic(sess, nenvs, nsteps, ob_space,
+                ac_space, policy)
         if load_path is not None:
             actor_critic.load(load_path)
             print('Loaded a2c')
+
+        summary_op = tf.summary.merge_all()
+        writer = tf.summary.FileWriter('./a2c_logs', graph=sess.graph)
 
         sess.run(tf.global_variables_initializer())
 
@@ -299,8 +300,11 @@ def train(policy, save_name, load_path=None):
             mb_values = mb_values.flatten()
             mb_masks = mb_masks.flatten()
 
-            loss, policy_loss, value_loss, policy_entropy = actor_critic.train(mb_obs,
-                    mb_rewards, mb_masks, mb_actions, mb_values, update)
+            loss, policy_loss, value_loss, policy_entropy, summary = actor_critic.train(mb_obs,
+                    mb_rewards, mb_masks, mb_actions, mb_values, update,
+                    summary_op)
+
+            writer.add_summary(summary, update)
 
             if update % log_interval == 0 or update == 1:
                 print('%i): %.4f, %.4f, %.4f' % (update, policy_loss, value_loss, policy_entropy))
@@ -319,6 +323,6 @@ if __name__ == '__main__':
     load_path = 'weights/model_%i.ckpt' % load_count
     load_path = None
 
-    train(CnnPolicy, 'a2c', load_path)
+    train(CnnPolicy, 'a2c', load_count, load_path)
 
 
