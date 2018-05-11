@@ -79,7 +79,8 @@ class CnnPolicy(object):
         return a, v, neglogp
 
     def value(self, sess, ob):
-        return sess.run(self.vf, {self.X:ob})
+        v = sess.run(self.vf, {self.X:ob})
+        return v
 
 
     def transform_input(self, X, sess):
@@ -148,7 +149,7 @@ class ActorCritic(object):
         self.saver = tf.train.Saver(params, max_to_keep=15)
 
 
-    def train(self, obs, rewards, masks, actions, values, step, summary_op):
+    def train(self, obs, rewards, masks, actions, values, step, summary_op=None):
         advs = rewards - values
 
         feed_dict = {
@@ -162,18 +163,24 @@ class ActorCritic(object):
         for transformed_input, inp in zip(mapped_input, inputs):
             feed_dict[inp] = transformed_input
 
-        loss, policy_loss, value_loss, policy_entropy, _, summary = self.sess.run([
+        ret_vals = [
                 self.loss,
                 self.pg_loss,
                 self.vf_loss,
                 self.entropy,
                 self.opt,
-                summary_op
-            ],
+            ]
+
+        if summary_op is not None:
+            ret_vals.append(summary_op)
+
+        results = self.sess.run(
+            ret_vals,
             feed_dict = feed_dict
         )
 
-        return loss, policy_loss, value_loss, policy_entropy, summary
+        return results
+
 
     def act(self, obs):
         return self.step_model.step(self.sess, obs)
@@ -205,7 +212,7 @@ def get_actor_critic(sess, nenvs, nsteps, ob_space, ac_space,
     return actor_critic
 
 
-def train(policy, save_name, load_count = 0, load_path=None):
+def train(policy, save_name, load_count = 0, summarize=True, load_path=None):
     nenvs = 16
     nsteps=5
     total_timesteps=int(1e6)
@@ -300,11 +307,14 @@ def train(policy, save_name, load_count = 0, load_path=None):
             mb_values = mb_values.flatten()
             mb_masks = mb_masks.flatten()
 
-            loss, policy_loss, value_loss, policy_entropy, summary = actor_critic.train(mb_obs,
-                    mb_rewards, mb_masks, mb_actions, mb_values, update,
-                    summary_op)
-
-            writer.add_summary(summary, update)
+            if summarize:
+                loss, policy_loss, value_loss, policy_entropy, _, summary = actor_critic.train(mb_obs,
+                        mb_rewards, mb_masks, mb_actions, mb_values, update,
+                        summary_op)
+                writer.add_summary(summary, update)
+            else:
+                loss, policy_loss, value_loss, policy_entropy, _ = actor_critic.train(mb_obs,
+                        mb_rewards, mb_masks, mb_actions, mb_values, update)
 
             if update % log_interval == 0 or update == 1:
                 print('%i): %.4f, %.4f, %.4f' % (update, policy_loss, value_loss, policy_entropy))

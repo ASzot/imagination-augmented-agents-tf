@@ -26,6 +26,7 @@ class RolloutEncoder(nn.Module):
     def forward(self, state, reward):
         num_steps  = state.size(0)
         batch_size = state.size(1)
+        print('')
 
         # In shape is just the shape of the state space
         state = state.view(-1, *self.in_shape)

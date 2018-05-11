@@ -126,7 +126,7 @@ def get_cache_loaded_a2c(sess, nenvs, nsteps, ob_space, ac_space):
     if g_actor_critic is None:
         with tf.variable_scope('actor'):
             g_actor_critic = get_actor_critic(sess, nenvs, nsteps, ob_space,
-                    ac_space, CnnPolicy)
+                    ac_space, CnnPolicy, should_summary=False)
         g_actor_critic.load('weights/model_100000.ckpt')
         print('Actor restored!')
     return g_actor_critic
@@ -175,11 +175,8 @@ class I2aPolicy(object):
             num_steps = tf.shape(self.imagined_state)[0]
             batch_size = tf.shape(self.imagined_state)[1]
 
-            hidden_state = self.get_encoder(self.imagined_state, self.imagined_reward, num_steps, batch_size, width, height, depth, hidden_size)
-
-            self.hidden_state = hidden_state
-
-            hidden_state = tf.reshape(hidden_state, [batch_size, hidden_size])
+            hidden_state = self.get_encoder(self.imagined_state, self.imagined_reward,
+                    num_steps, batch_size, width, height, depth, hidden_size)
 
             # Model free path.
             self.state = tf.placeholder(tf.float32, [None, width, height,
@@ -187,16 +184,23 @@ class I2aPolicy(object):
 
             state_batch_size = tf.shape(self.state)[0]
 
-            c1 = slim.conv2d(self.state, 16, kernel_size=3, stride=1, activation_fn=tf.nn.relu)
-            c2 = slim.conv2d(c1, 16, kernel_size=3, stride=2, activation_fn=tf.nn.relu)
+            c1 = slim.conv2d(self.state, 16, kernel_size=3,
+                    stride=1, padding='valid', activation_fn=tf.nn.relu)
+            c2 = slim.conv2d(c1, 16, kernel_size=3,
+                    stride=2, padding='valid', activation_fn=tf.nn.relu)
 
-            features = tf.reshape(c2, [state_batch_size, 8 * 10 * 16])
+            features = tf.reshape(c2, [state_batch_size, 6 * 8 * 16])
+
+            self.features = features
+
+            hidden_state = tf.reshape(hidden_state, [state_batch_size, 80 * 256
+                // 16])
 
             x = tf.concat([features, hidden_state], axis=1)
             x = slim.fully_connected(x, 256, activation_fn=tf.nn.relu)
 
-            self.pi = slim.fully_connected(x, 1)
-            self.vf = slim.fully_connected(x, num_actions)
+            self.pi = slim.fully_connected(x, num_actions)
+            self.vf = slim.fully_connected(x, 1)[:, 0]
 
         # Sample action. `pi` is like the logits
         u = tf.random_uniform(tf.shape(self.pi))
@@ -213,16 +217,17 @@ class I2aPolicy(object):
         state = tf.reshape(state, [num_steps * batch_size, width, height,
             depth])
 
-        c1 = slim.conv2d(state, 16, kernel_size=3, stride=1, activation_fn=tf.nn.relu)
-        features = slim.conv2d(c1, 16, kernel_size=3, stride=2, activation_fn=tf.nn.relu)
+        c1 = slim.conv2d(state, 16, kernel_size=3, stride=1,
+                padding='valid', activation_fn=tf.nn.relu)
+        features = slim.conv2d(c1, 16, kernel_size=3, stride=2,
+                padding='valid', activation_fn=tf.nn.relu)
 
-        features = tf.reshape(features, [num_steps, batch_size, 8 * 10 * 16])
+        features = tf.reshape(features, [num_steps, batch_size, 6 * 8 * 16])
 
         rnn_input = tf.concat([features, reward], 2)
-        print(rnn_input)
 
         cell = tf.contrib.rnn.GRUCell(hidden_size)
-        _, internal_state = tf.nn.dynamic_rnn(cell, rnn_input, dtype=tf.float32)
+        _, internal_state = tf.nn.dynamic_rnn(cell, rnn_input, time_major=True, dtype=tf.float32)
 
         return internal_state
 
@@ -230,37 +235,28 @@ class I2aPolicy(object):
     def step(self, sess, ob):
         imagined_state, imagined_reward, ob = self.transform_input(ob, sess)
 
-        #a, v, neglogp = sess.run([
-        #        self.a0,
-        #        self.vf,
-        #        self.neglogp0
-        #    ],
-        #    {
-        #        self.imagined_state: imagined_state,
-        #        self.imagined_reward: imagined_reward,
-        #        self.state: ob
-        #})
-        a = sess.run([
-            self.hidden_state
+        a, v, neglogp = sess.run([
+                self.a0,
+                self.vf,
+                self.neglogp0
             ],
             {
                 self.imagined_state: imagined_state,
                 self.imagined_reward: imagined_reward,
                 self.state: ob
         })
-        print('len of a', np.array(a).shape)
-        raise ValueError()
         return a, v, neglogp
 
 
     def value(self, sess, ob):
         imagined_state, imagined_reward, ob = self.transform_input(ob, sess)
 
-        return sess.run(self.vf, {
+        v = sess.run(self.vf, {
             self.imagined_state: imagined_state,
             self.imagined_reward: imagined_reward,
             self.state: ob
         })
+        return v
 
     def get_inputs(self):
         return [self.imagined_state, self.imagined_reward, self.state]
@@ -273,7 +269,7 @@ class I2aPolicy(object):
 
 if __name__ == '__main__':
     os.environ["CUDA_VISIBLE_DEVICES"]="0"
-    train(I2aPolicy, 'i2a')
+    train(I2aPolicy, 'i2a', summarize=False)
 
 
 
