@@ -47,7 +47,8 @@ def basic_block(X, batch_size, depth, width, height, n1, n2, n3):
     return tf.concat([c, X], axis=-1)
 
 
-def create_env_model(obs_shape, num_actions, num_pixels, num_rewards, reward_coeff=0.1):
+def create_env_model(obs_shape, num_actions, num_pixels, num_rewards,
+        should_summary=True, reward_coeff=0.1):
     width = obs_shape[0]
     height = obs_shape[1]
     depth = obs_shape[2]
@@ -99,9 +100,10 @@ def create_env_model(obs_shape, num_actions, num_pixels, num_rewards, reward_coe
     opt = tf.train.AdamOptimizer().minimize(loss)
 
     # Tensorboard
-    tf.summary.scalar('Loss', loss)
-    tf.summary.scalar('Reward Loss', reward_loss)
-    tf.summary.scalar('Image Loss', image_loss)
+    if should_summary:
+        tf.summary.scalar('Loss', loss)
+        tf.summary.scalar('Reward Loss', reward_loss)
+        tf.summary.scalar('Image Loss', image_loss)
 
     return EnvModelData(image, reward, states, onehot_actions, loss,
             target_states, target_rewards, opt)

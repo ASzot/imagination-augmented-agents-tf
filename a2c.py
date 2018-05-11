@@ -212,7 +212,7 @@ def get_actor_critic(sess, nenvs, nsteps, ob_space, ac_space,
     return actor_critic
 
 
-def train(policy, save_name, load_count = 0, summarize=True, load_path=None):
+def train(policy, save_name, load_count = 0, summarize=True, load_path=None, log_path = './logs'):
     nenvs = 16
     nsteps=5
     total_timesteps=int(1e6)
@@ -239,20 +239,19 @@ def train(policy, save_name, load_count = 0, summarize=True, load_path=None):
 
     with tf.Session() as sess:
         actor_critic = get_actor_critic(sess, nenvs, nsteps, ob_space,
-                ac_space, policy)
+                ac_space, policy, summarize)
         if load_path is not None:
             actor_critic.load(load_path)
             print('Loaded a2c')
 
         summary_op = tf.summary.merge_all()
-        writer = tf.summary.FileWriter('./a2c_logs', graph=sess.graph)
+        writer = tf.summary.FileWriter(log_path, graph=sess.graph)
 
         sess.run(tf.global_variables_initializer())
 
         batch_ob_shape = (nenvs*nsteps, nw, nh, nc)
 
         dones = [False for _ in range(nenvs)]
-
         nbatch = nenvs * nsteps
 
         episode_rewards = np.zeros((nenvs, ))
@@ -333,6 +332,6 @@ if __name__ == '__main__':
     load_path = 'weights/model_%i.ckpt' % load_count
     load_path = None
 
-    train(CnnPolicy, 'a2c', load_count, load_path)
+    train(CnnPolicy, 'a2c', load_count, load_path, './a2c_logs')
 
 

@@ -138,7 +138,7 @@ def get_cache_loaded_env_model(sess, nenvs, ob_space, num_actions):
     if g_env_model is None:
         with tf.variable_scope('env_model'):
             g_env_model = create_env_model(ob_space, num_actions, num_pixels,
-                    len(mode_rewards['regular']))
+                    len(mode_rewards['regular']), should_summary=False)
 
         save_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='env_model')
         loader = tf.train.Saver(var_list=save_vars)
@@ -269,7 +269,7 @@ class I2aPolicy(object):
 
 if __name__ == '__main__':
     os.environ["CUDA_VISIBLE_DEVICES"]="0"
-    train(I2aPolicy, 'i2a', summarize=False)
+    train(I2aPolicy, 'i2a', summarize=True, log_path='./i2a_logs')
 
 
 
