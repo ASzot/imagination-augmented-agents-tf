@@ -58,6 +58,27 @@ def softmax(X, theta = 1.0, axis = None):
     return p
 
 
+def convert_target_to_real(batch_size, nw, nh, nc, imagined_state, imagined_reward):
+    #imagined_state, imagined_reward = env_model(inputs)
+    #imagined_state = F.softmax(imagined_state)
+    #iss.append(imagined_state)
+    #
+    #next_state, reward, done, _ = env.step(actions[0])
+    #ss.append(state)
+    #state = next_state
+    #
+    #imagined_image = target_to_pix(imagined_state.view(batch_size, -1, len(pixels))[0].max(1)[1].data.cpu().numpy())
+    #imagined_image = imagined_image.reshape(15, 19, 3)
+
+    imagined_state = softmax(imagined_state)
+    imagined_state = np.argmax(imagined_state, axis=1)
+
+    imagined_state = target_to_pix(imagined_state)
+    imagined_state = imagined_state.reshape((batch_size, nw, nh,
+        nc))
+
+    return imagined_state, imagined_reward
+
 
 class ImaginationCore(object):
     def __init__(self, num_rollouts, num_actions, num_rewards,
@@ -101,12 +122,7 @@ class ImaginationCore(object):
                         self.env_model.input_actions: onehot_action,
                 })
 
-            imagined_state = np.argmax(softmax(imagined_state, axis=1), axis=1)
-            imagined_reward = np.argmax(softmax(imagined_reward, axis=1), axis=1)
-
-            imagined_state = target_to_pix(imagined_state)
-            imagined_state = imagined_state.reshape((rollout_batch_size, nw, nh,
-                nc))
+            imagined_state, imagined_reward = convert_target_to_real(rollout_batch_size, nw, nh, nc, imagined_state, imagined_reward)
 
             onehot_reward = np.zeros((rollout_batch_size, self.num_rewards))
             onehot_reward[range(rollout_batch_size), imagined_reward] = 1

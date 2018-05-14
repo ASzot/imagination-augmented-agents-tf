@@ -9,7 +9,6 @@ pixels = (
     (1.0, 1.0, 0.0),
     (0.0, 0.0, 0.0),
     (1.0, 0.0, 0.0),
-    (1.0, 0.0, 1.0),
 )
 pixel_to_categorical = {pix:i for i, pix in enumerate(pixels)}
 num_pixels = len(pixels)
@@ -26,7 +25,7 @@ reward_to_categorical = {mode: {reward:i for i, reward in enumerate(mode_rewards
 
 def pix_to_target(next_states):
     target = []
-    for pixel in next_states.transpose(0, 2, 3, 1).reshape(-1, 3):
+    for pixel in next_states.reshape(-1, 3):
         target.append(pixel_to_categorical[tuple([np.ceil(pixel[0]), np.ceil(pixel[1]), np.ceil(pixel[2])])])
     return target
 

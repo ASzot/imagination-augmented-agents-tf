@@ -6,6 +6,8 @@ from a2c import get_actor_critic, CnnPolicy
 from common.multiprocessing_env import SubprocVecEnv
 import numpy as np
 
+from tqdm import tqdm
+
 from pacman_util import num_pixels, mode_rewards, pix_to_target, rewards_to_target
 
 
@@ -57,7 +59,6 @@ def create_env_model(obs_shape, num_actions, num_pixels, num_rewards,
 
     onehot_actions = tf.placeholder(tf.float32, [None, width,
         height, num_actions])
-    print('Number of actions are', num_actions)
 
     batch_size = tf.shape(states)[0]
 
@@ -116,12 +117,11 @@ def make_env():
 
     return _thunk
 
-def play_games(envs, frames):
+def play_games(actor_critic, envs, frames):
     states = envs.reset()
 
     for frame_idx in range(frames):
-        tmp_states = states.transpose(0, 2, 1, 3)
-        actions, _, _ = actor_critic.act(tmp_states)
+        actions, _, _ = actor_critic.act(states)
 
         next_states, rewards, dones, _ = envs.step(actions)
 
@@ -156,8 +156,7 @@ if __name__ == '__main__':
 
     os.environ["CUDA_VISIBLE_DEVICES"]="1"
     with tf.Session() as sess:
-        actor_critic = get_actor_critic(sess, nenvs, nsteps, [ob_space[1], ob_space[0],
-            ob_space[2]], ac_space, CnnPolicy, should_summary=False)
+        actor_critic = get_actor_critic(sess, nenvs, nsteps, ob_space, ac_space, CnnPolicy, should_summary=False)
         actor_critic.load('weights/model_100000.ckpt')
 
         with tf.variable_scope('env_model'):
@@ -167,6 +166,7 @@ if __name__ == '__main__':
         sess.run(tf.global_variables_initializer())
 
         num_updates = 5000
+        log_interval = 100
 
         losses = []
         all_rewards = []
@@ -180,7 +180,7 @@ if __name__ == '__main__':
 
         writer = tf.summary.FileWriter('./env_logs', graph=sess.graph)
 
-        for frame_idx, states, actions, rewards, next_states, dones in play_games(envs, num_updates):
+        for frame_idx, states, actions, rewards, next_states, dones in tqdm(play_games(actor_critic, envs, num_updates), total=num_updates):
             target_state = pix_to_target(next_states)
             target_reward = rewards_to_target('regular', rewards)
 
@@ -197,7 +197,8 @@ if __name__ == '__main__':
                     env_model.target_rewards: target_reward
                 })
 
-            print('%i) %.5f' % (frame_idx, l))
+            if frame_idx % log_interval == 0:
+                print('%i) %.5f' % (frame_idx, l))
             writer.add_summary(summary, frame_idx)
 
         saver.save(sess, 'weights/env_model.ckpt')
