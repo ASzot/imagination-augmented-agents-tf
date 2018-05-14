@@ -4,3 +4,4 @@ __pycache__
 .ipynb_checkpoints
 env_logs
 a2c_logs
+i2a_logs
