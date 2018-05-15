@@ -7,7 +7,7 @@ import numpy as np
 
 from tqdm import tqdm
 
-from pacman_util import num_pixels, mode_rewards, pix_to_target, rewards_to_target
+from common.pacman_util import num_pixels, mode_rewards, pix_to_target, rewards_to_target
 
 
 def pool_inject(X, batch_size, depth, width, height):
@@ -110,7 +110,7 @@ def create_env_model(obs_shape, num_actions, num_pixels, num_rewards,
         tf.summary.scalar('Image Loss', image_loss)
 
     return EnvModelData(image, reward, states, onehot_actions, loss,
-            reward_loss, image_loss, target_states, target_rewards, opt), target_reward_one_hot
+            reward_loss, image_loss, target_states, target_rewards, opt)
 
 
 def make_env():
@@ -166,7 +166,7 @@ if __name__ == '__main__':
         actor_critic.load('weights/model_100000.ckpt')
 
         with tf.variable_scope('env_model'):
-            env_model, target_one_hot = create_env_model(ob_space, num_actions, num_pixels, len(mode_rewards['regular']))
+            env_model = create_env_model(ob_space, num_actions, num_pixels, len(mode_rewards['regular']))
 
         summary_op = tf.summary.merge_all()
         sess.run(tf.global_variables_initializer())
@@ -195,13 +195,12 @@ if __name__ == '__main__':
             # Change so actions are the 'depth of the image' as tf expects
             onehot_actions = onehot_actions.transpose(0, 2, 3, 1)
 
-            s, r, l, reward_loss, image_loss, t_hot, summary, _ = sess.run([
+            s, r, l, reward_loss, image_loss, summary, _ = sess.run([
                 env_model.imag_state,
                 env_model.imag_reward,
                 env_model.loss,
                 env_model.reward_loss,
                 env_model.image_loss,
-                target_one_hot,
                 summary_op,
                 env_model.opt], feed_dict={
                     env_model.input_states: states,

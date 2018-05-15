@@ -6,12 +6,11 @@ import numpy as np
 import tensorflow as tf
 from common.minipacman import MiniPacman
 from common.multiprocessing_env import SubprocVecEnv
-import tensorflow.contrib.slim as slim
 from tqdm import tqdm
 
 from env_model import create_env_model
 from a2c import get_actor_critic, train, CnnPolicy
-from pacman_util import num_pixels, mode_rewards, pix_to_target, rewards_to_target, mode_rewards, target_to_pix
+from common.pacman_util import num_pixels, mode_rewards, pix_to_target, rewards_to_target, mode_rewards, target_to_pix
 
 
 def softmax(X, theta = 1.0, axis = None):
@@ -59,23 +58,14 @@ def softmax(X, theta = 1.0, axis = None):
 
 
 def convert_target_to_real(batch_size, nw, nh, nc, imagined_state, imagined_reward):
-    #imagined_state, imagined_reward = env_model(inputs)
-    #imagined_state = F.softmax(imagined_state)
-    #iss.append(imagined_state)
-    #
-    #next_state, reward, done, _ = env.step(actions[0])
-    #ss.append(state)
-    #state = next_state
-    #
-    #imagined_image = target_to_pix(imagined_state.view(batch_size, -1, len(pixels))[0].max(1)[1].data.cpu().numpy())
-    #imagined_image = imagined_image.reshape(15, 19, 3)
-
     imagined_state = softmax(imagined_state, axis=1)
     imagined_state = np.argmax(imagined_state, axis=1)
-
     imagined_state = target_to_pix(imagined_state)
     imagined_state = imagined_state.reshape((batch_size, nw, nh,
         nc))
+
+    imagined_reward = softmax(imagined_reward, axis=1)
+    imagined_reward = np.argmax(imagined_reward, axis=1)
 
     return imagined_state, imagined_reward
 
@@ -200,10 +190,10 @@ class I2aPolicy(object):
 
             state_batch_size = tf.shape(self.state)[0]
 
-            c1 = slim.conv2d(self.state, 16, kernel_size=3,
-                    stride=1, padding='valid', activation_fn=tf.nn.relu)
-            c2 = slim.conv2d(c1, 16, kernel_size=3,
-                    stride=2, padding='valid', activation_fn=tf.nn.relu)
+            c1 = tf.layers.conv2d(self.state, 16, kernel_size=3,
+                    strides=1, padding='valid', activation=tf.nn.relu)
+            c2 = tf.layers.conv2d(c1, 16, kernel_size=3,
+                    strides=2, padding='valid', activation=tf.nn.relu)
 
             features = tf.reshape(c2, [state_batch_size, 6 * 8 * 16])
 
@@ -213,10 +203,10 @@ class I2aPolicy(object):
                 // 16])
 
             x = tf.concat([features, hidden_state], axis=1)
-            x = slim.fully_connected(x, 256, activation_fn=tf.nn.relu)
+            x = tf.layers.dense(x, 256, activation=tf.nn.relu)
 
-            self.pi = slim.fully_connected(x, num_actions)
-            self.vf = slim.fully_connected(x, 1)[:, 0]
+            self.pi = tf.layers.dense(x, num_actions)
+            self.vf = tf.layers.dense(x, 1)[:, 0]
 
         # Sample action. `pi` is like the logits
         u = tf.random_uniform(tf.shape(self.pi))
@@ -233,10 +223,10 @@ class I2aPolicy(object):
         state = tf.reshape(state, [num_steps * batch_size, width, height,
             depth])
 
-        c1 = slim.conv2d(state, 16, kernel_size=3, stride=1,
-                padding='valid', activation_fn=tf.nn.relu)
-        features = slim.conv2d(c1, 16, kernel_size=3, stride=2,
-                padding='valid', activation_fn=tf.nn.relu)
+        c1 = tf.layers.conv2d(state, 16, kernel_size=3, strides=1,
+                padding='valid', activation=tf.nn.relu)
+        features = tf.layers.conv2d(c1, 16, kernel_size=3, strides=2,
+                padding='valid', activation=tf.nn.relu)
 
         features = tf.reshape(features, [num_steps, batch_size, 6 * 8 * 16])
 
@@ -284,7 +274,7 @@ class I2aPolicy(object):
 
 
 if __name__ == '__main__':
-    os.environ["CUDA_VISIBLE_DEVICES"]="0"
+    #os.environ["CUDA_VISIBLE_DEVICES"]="0"
     train(I2aPolicy, 'i2a', summarize=True, log_path='./i2a_logs')
 
 
