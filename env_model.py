@@ -1,6 +1,5 @@
 import os
 import tensorflow as tf
-import tensorflow.contrib.slim as slim
 from common.minipacman import MiniPacman
 from a2c import get_actor_critic, CnnPolicy
 from common.multiprocessing_env import SubprocVecEnv
@@ -12,7 +11,7 @@ from pacman_util import num_pixels, mode_rewards, pix_to_target, rewards_to_targ
 
 
 def pool_inject(X, batch_size, depth, width, height):
-    m = slim.max_pool2d(X, kernel_size=(width, height))
+    m = tf.layers.max_pooling2d(X, pool_size=(width, height), strides=(width, height))
     tiled = tf.tile(m, (1, width, height, 1))
     return tf.concat([tiled, X], axis=-1)
 
@@ -24,27 +23,27 @@ def basic_block(X, batch_size, depth, width, height, n1, n2, n3):
     with tf.variable_scope('part_1_block'):
         # Padding was 6 here
         p_padded = tf.pad(p, [[0, 0], [6, 6], [6, 6], [0, 0]])
-        p_1_c1 = slim.conv2d(p_padded, n1, kernel_size=1,
-                stride=2, padding='valid', activation_fn=tf.nn.relu)
+        p_1_c1 = tf.layers.conv2d(p_padded, n1, kernel_size=1,
+                strides=2, padding='valid', activation=tf.nn.relu)
 
         # Padding was 5, 6
         p_1_c1 = tf.pad(p_1_c1, [[0,0], [5, 5], [6, 6], [0, 0]])
-        p_1_c2 = slim.conv2d(p_1_c1, n1, kernel_size=10, stride=1,
-                padding='valid', activation_fn=tf.nn.relu)
+        p_1_c2 = tf.layers.conv2d(p_1_c1, n1, kernel_size=10, strides=1,
+                padding='valid', activation=tf.nn.relu)
 
     with tf.variable_scope('part_2_block'):
-        p_2_c1 = slim.conv2d(p, n2, kernel_size=1,
-                activation_fn=tf.nn.relu)
+        p_2_c1 = tf.layers.conv2d(p, n2, kernel_size=1,
+                activation=tf.nn.relu)
 
         p_2_c1 = tf.pad(p_2_c1, [[0,0],[1,1],[1,1],[0,0]])
-        p_2_c2 = slim.conv2d(p_2_c1, n2, kernel_size=3, stride=1,
-                padding='valid', activation_fn=tf.nn.relu)
+        p_2_c2 = tf.layers.conv2d(p_2_c1, n2, kernel_size=3, strides=1,
+                padding='valid', activation=tf.nn.relu)
 
     with tf.variable_scope('combine_parts'):
         combined = tf.concat([p_1_c2, p_2_c2], axis=-1)
 
-        c = slim.conv2d(combined, n3, kernel_size=1,
-                activation_fn=tf.nn.relu)
+        c = tf.layers.conv2d(combined, n3, kernel_size=1,
+                activation=tf.nn.relu)
 
     return tf.concat([c, X], axis=-1)
 
@@ -68,7 +67,7 @@ def create_env_model(obs_shape, num_actions, num_pixels, num_rewards,
     inputs = tf.concat([states, onehot_actions], axis=-1)
 
     with tf.variable_scope('pre_conv'):
-        c = slim.conv2d(inputs, 64, kernel_size=1, activation_fn=tf.nn.relu)
+        c = tf.layers.conv2d(inputs, 64, kernel_size=1, activation=tf.nn.relu)
 
     with tf.variable_scope('basic_block_1'):
         bb1 = basic_block(c, batch_size, 64, width, height, 16, 32, 64)
@@ -76,19 +75,23 @@ def create_env_model(obs_shape, num_actions, num_pixels, num_rewards,
     with tf.variable_scope('basic_block_2'):
         bb2 = basic_block(bb1, batch_size, 128, width, height, 16, 32, 64)
 
+
     with tf.variable_scope('image_conver'):
-        image = slim.conv2d(bb2, 256, kernel_size=1, activation_fn=tf.nn.relu)
+        image = tf.layers.conv2d(bb2, 256, kernel_size=1, activation=tf.nn.relu)
         image = tf.reshape(image, [batch_size * width * height, 256])
-        image = slim.fully_connected(image, num_pixels)
+        image = tf.layers.dense(image, num_pixels)
 
     with tf.variable_scope('reward'):
-        reward = slim.conv2d(bb2, 64, kernel_size=1,
-                activation_fn=tf.nn.relu)
-        reward = slim.conv2d(reward, 64, kernel_size=1, activation_fn=tf.nn.relu)
+        reward = tf.layers.conv2d(bb2, 64, kernel_size=1,
+                activation=tf.nn.relu)
+
+        reward = tf.layers.conv2d(reward, 64, kernel_size=1,
+                activation=tf.nn.relu)
 
         reward = tf.reshape(reward, [batch_size, width * height * 64])
 
-        reward = slim.fully_connected(reward, num_rewards)
+        #bias_init = tf.constant_initializer(0.1, dtype=tf.float32)
+        reward = tf.layers.dense(reward, num_rewards)
 
     target_states_one_hot = tf.one_hot(target_states, depth=num_pixels)
     image_loss = tf.losses.softmax_cross_entropy(target_states_one_hot, image)
@@ -107,7 +110,7 @@ def create_env_model(obs_shape, num_actions, num_pixels, num_rewards,
         tf.summary.scalar('Image Loss', image_loss)
 
     return EnvModelData(image, reward, states, onehot_actions, loss,
-            target_states, target_rewards, opt)
+            reward_loss, image_loss, target_states, target_rewards, opt), target_reward_one_hot
 
 
 def make_env():
@@ -132,12 +135,15 @@ def play_games(actor_critic, envs, frames):
 
 class EnvModelData(object):
     def __init__(self, imag_state, imag_reward, input_states, input_actions,
-            loss, target_states, target_rewards, opt):
+            loss, reward_loss, image_loss, target_states, target_rewards, opt):
         self.imag_state       = imag_state
         self.imag_reward      = imag_reward
         self.input_states     = input_states
         self.input_actions    = input_actions
+
         self.loss             = loss
+        self.reward_loss      = reward_loss
+        self.image_loss       = image_loss
         self.target_states    = target_states
         self.target_rewards   = target_rewards
         self.opt              = opt
@@ -160,7 +166,7 @@ if __name__ == '__main__':
         actor_critic.load('weights/model_100000.ckpt')
 
         with tf.variable_scope('env_model'):
-            env_model = create_env_model(ob_space, num_actions, num_pixels, len(mode_rewards['regular']))
+            env_model, target_one_hot = create_env_model(ob_space, num_actions, num_pixels, len(mode_rewards['regular']))
 
         summary_op = tf.summary.merge_all()
         sess.run(tf.global_variables_initializer())
@@ -189,8 +195,15 @@ if __name__ == '__main__':
             # Change so actions are the 'depth of the image' as tf expects
             onehot_actions = onehot_actions.transpose(0, 2, 3, 1)
 
-            s, r, l, summary, _ = sess.run([env_model.imag_state, env_model.imag_reward,
-                env_model.loss, summary_op, env_model.opt], feed_dict={
+            s, r, l, reward_loss, image_loss, t_hot, summary, _ = sess.run([
+                env_model.imag_state,
+                env_model.imag_reward,
+                env_model.loss,
+                env_model.reward_loss,
+                env_model.image_loss,
+                target_one_hot,
+                summary_op,
+                env_model.opt], feed_dict={
                     env_model.input_states: states,
                     env_model.input_actions: onehot_actions,
                     env_model.target_states: target_state,
@@ -198,7 +211,7 @@ if __name__ == '__main__':
                 })
 
             if frame_idx % log_interval == 0:
-                print('%i) %.5f' % (frame_idx, l))
+                print('%i) %.5f, %.5f, %.5f' % (frame_idx, l, reward_loss, image_loss))
             writer.add_summary(summary, frame_idx)
 
         saver.save(sess, 'weights/env_model.ckpt')

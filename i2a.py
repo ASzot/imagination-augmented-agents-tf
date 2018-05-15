@@ -70,7 +70,7 @@ def convert_target_to_real(batch_size, nw, nh, nc, imagined_state, imagined_rewa
     #imagined_image = target_to_pix(imagined_state.view(batch_size, -1, len(pixels))[0].max(1)[1].data.cpu().numpy())
     #imagined_image = imagined_image.reshape(15, 19, 3)
 
-    imagined_state = softmax(imagined_state)
+    imagined_state = softmax(imagined_state, axis=1)
     imagined_state = np.argmax(imagined_state, axis=1)
 
     imagined_state = target_to_pix(imagined_state)
