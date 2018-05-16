@@ -1,9 +1,22 @@
 # Imagination Augmented Agents
-Tensorflow implementation of <a href'https://arxiv.org/abs/1707.06203'>Imagination Augmented Agents</a> by DeepMind, published as a conference proceeding at NIPS 2017. 
 
 ## Description
+Tensorflow implementation of [Imagination Augmented
+Agents]('https://arxiv.org/abs/1707.06203') by DeepMind, published as a
+conference proceeding at NIPS 2017. This paper combines model free and model
+based RL in an agent that constructs implicit plans by learning to interpret
+predictions from a learned environment model.
 
-## Prereqs
+The agent has its own internal simulations using a learned environment model
+(this is trained independently of the agent). This environment model is trained
+independently of the agent on future frame and reward prediction conditioned on
+action using a baseline actor (a2c) to simulate a number of
+games. The environment model can then be used to simulate a number of
+trajectories for the imagination augmented agent. To efficiently use these
+simulations, the agent learns an encoder that extracts information from these
+imaginations beyond simply rewards.
+
+## Prerequisites
 - TensorFlow 1.4.1
 - NumPy 1.14.0
 
@@ -11,17 +24,20 @@ See `requirements.txt` for the complete list of requirements I used, however, on
 listed above are important.
 
 ## Usage
-Train the actor critic model using:
+Train the actor critic model using the following. Training this is a necessary
+baseline and needs to be used to train the environment model.
 ```
 python a2c.py
 ```
 
-Train the environment model using:
+Train the environment model using the following. Remember the a2c model must be
+trained already.
 ```
 python env_model.py
 ```
 
-Train the imagination augmented agent using:
+Train the imagination augmented agent using the following. Remember the
+environment model must already be trained. 
 ```
 python i2a.py
 ```
