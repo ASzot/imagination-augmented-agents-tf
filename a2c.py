@@ -6,7 +6,6 @@ import numpy as np
 import tensorflow as tf
 from common.minipacman import MiniPacman
 from common.multiprocessing_env import SubprocVecEnv
-import tensorflow.contrib.slim as slim
 from tqdm import tqdm
 
 
@@ -35,28 +34,28 @@ class CnnPolicy(object):
         nact = ac_space.n
         X = tf.placeholder(tf.float32, ob_shape) #obs
         with tf.variable_scope("model", reuse=reuse):
-            conv1 = slim.conv2d(activation_fn=tf.nn.relu,
+            conv1 = tf.layers.conv2d(activation=tf.nn.relu,
                                         inputs=X,
                                         num_outputs=16,
                                         kernel_size=[3,3],
-                                        stride=[1,1],
+                                        strides=[1,1],
                                         padding='VALID')
-            conv2 = slim.conv2d(activation_fn=tf.nn.relu,
+            conv2 = tf.layers.conv2d(activation=tf.nn.relu,
                                         inputs=conv1,
                                         num_outputs=16,
                                         kernel_size=[3,3],
-                                        stride=[2,2],
+                                        strides=[2,2],
                                         padding='VALID')
-            h = slim.fully_connected(slim.flatten(conv2), 256, activation_fn=tf.nn.relu)
+            h = tf.layers.dense(tf.layers.flatten(conv2), 256, activation=tf.nn.relu)
             with tf.variable_scope('pi'):
-                pi = slim.fully_connected(h, nact,
-                        activation_fn=None,
+                pi = tf.layers.dense(h, nact,
+                        activation=None,
                         weights_initializer=tf.random_normal_initializer(0.01),
                         biases_initializer=None)
 
             with tf.variable_scope('v'):
-                vf = slim.fully_connected(h, 1,
-                        activation_fn=None,
+                vf = tf.layers.dense(h, 1,
+                        activation=None,
                         weights_initializer=tf.random_normal_initializer(0.01),
                         biases_initializer=None)[:, 0]
 
@@ -319,7 +318,8 @@ def train(policy, save_name, load_count = 0, summarize=True, load_path=None, log
                 print('%i): %.4f, %.4f, %.4f' % (update, policy_loss, value_loss, policy_entropy))
                 print(final_rewards.mean())
 
-            if update % save_interval == 0 or update == 1:
+            if update % save_interval == 0:
+                print('Saving model')
                 actor_critic.save(save_path, save_name + '_' + str(update) + '.ckpt')
 
         actor_critic.save(save_path, save_name + '_done.ckpt')
