@@ -1,7 +1,7 @@
 # Imagination Augmented Agents
 
 ## Description
-Tensorflow implementation of [Imagination AugmentedAgents]("https://arxiv.org/abs/1707.06203") by DeepMind, published as a conference proceeding at NIPS 2017. This paper combines model free and model
+Tensorflow implementation of [Imagination Augmented Agents](https://arxiv.org/abs/1707.06203) by DeepMind, published as a conference proceeding at NIPS 2017. This paper combines model free and model
 based RL in an agent that constructs implicit plans by learning to interpret
 predictions from a learned environment model.
 
