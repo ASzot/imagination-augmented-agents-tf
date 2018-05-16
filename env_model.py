@@ -1,3 +1,6 @@
+# To train the environment model. See paper appendix for implementation
+# details.
+
 import os
 import tensorflow as tf
 from common.minipacman import MiniPacman
@@ -14,7 +17,6 @@ def pool_inject(X, batch_size, depth, width, height):
     m = tf.layers.max_pooling2d(X, pool_size=(width, height), strides=(width, height))
     tiled = tf.tile(m, (1, width, height, 1))
     return tf.concat([tiled, X], axis=-1)
-
 
 def basic_block(X, batch_size, depth, width, height, n1, n2, n3):
     with tf.variable_scope('pool_inject'):
@@ -90,7 +92,6 @@ def create_env_model(obs_shape, num_actions, num_pixels, num_rewards,
 
         reward = tf.reshape(reward, [batch_size, width * height * 64])
 
-        #bias_init = tf.constant_initializer(0.1, dtype=tf.float32)
         reward = tf.layers.dense(reward, num_rewards)
 
     target_states_one_hot = tf.one_hot(target_states, depth=num_pixels)

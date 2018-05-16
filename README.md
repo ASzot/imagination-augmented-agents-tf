@@ -1,18 +1,35 @@
 # Imagination Augmented Agents
 
 ## Description
-Tensorflow implementation of [Imagination Augmented Agents](https://arxiv.org/abs/1707.06203) by DeepMind, published as a conference proceeding at NIPS 2017. This paper combines model free and model
+TensorFlow implementation of [Imagination Augmented Agents](https://arxiv.org/abs/1707.06203) by DeepMind, published as a conference proceeding at NIPS 2017. This paper combines model free and model
 based RL in an agent that constructs implicit plans by learning to interpret
 predictions from a learned environment model.
 
-The agent has its own internal simulations using a learned environment model
-(this is trained independently of the agent). This environment model is trained
+The agent creates its own internal simulations using a learned environment model. This environment model is trained
 independently of the agent on future frame and reward prediction conditioned on
-action using a baseline actor (a2c) to simulate a number of
-games. The environment model can then be used to simulate a number of
+action using a baseline actor (a2c) to play out a number of
+games. The environment model can then be used to simulate potential
 trajectories for the imagination augmented agent. To efficiently use these
-simulations, the agent learns an encoder that extracts information from these
-imaginations beyond simply rewards.
+simulated trajectories, the agent learns an encoder that extracts information from these
+imaginations including both state and reward.
+
+![Network Architecture](https://github.com/ASzot/imagination-augmented-agents-tf/img/arch.png "Network architecture")
+
+Above is the network architecture diagram from the paper. Below is the
+architecture of the environment model, also taken from the paper.
+
+![Environment Model](https://github.com/ASzot/imagination-augmented-agents-tf/img/env_model.png "Environment Model")
+
+This implementation was done according to the specifications of the
+architecture in the appendix of the paper for Pacman. The game used in this was
+Pacman as used in the paper, however, any game could be substituted.
+
+Code from OpenAI's Baseline is used for multiprocessing
+(`common/multiprocessing_env.py`). DeepMind's implementation of MiniPacman
+is used (`common/deepmind.py`). Implementation of `common/minipacman.py` is from @higgsfield.
+
+OpenAI's code for Pacman and multiprocessing features were used
+and are under `./common/`.
 
 ## Prerequisites
 - TensorFlow 1.4.1

@@ -1,13 +1,12 @@
+# Inspired from OpenAI Baselines. This uses the same design of having an easily
+# substitutable generic policy that can be trained. This allows to easily
+# substitute in the I2A policy as opposed to the basic CNN one.
 import os
-import gym
-import time
-import logging
 import numpy as np
 import tensorflow as tf
 from common.minipacman import MiniPacman
 from common.multiprocessing_env import SubprocVecEnv
 from tqdm import tqdm
-
 
 def discount_with_dones(rewards, dones, gamma):
     discounted = []
@@ -25,14 +24,13 @@ def cat_entropy(logits):
     p0 = ea0 / z0
     return tf.reduce_sum(p0 * (tf.log(z0) - a0), 1)
 
+# Basic baseline policy
 class CnnPolicy(object):
     def __init__(self, sess, ob_space, ac_space, nbatch, nsteps, reuse=False):
         nw, nh, nc = ob_space
 
-        # Do not specify the batch size.
-        ob_shape = (None, nw, nh, nc)
         nact = ac_space.n
-        X = tf.placeholder(tf.float32, ob_shape) #obs
+        X = tf.placeholder(tf.float32, [None, nw, nh, nc]) #obs
         with tf.variable_scope("model", reuse=reuse):
             conv1 = tf.layers.conv2d(activation=tf.nn.relu,
                                         inputs=X,
@@ -81,7 +79,8 @@ class CnnPolicy(object):
         v = sess.run(self.vf, {self.X:ob})
         return v
 
-
+    # Next two methods are required when we will have to generate the imaginations later in the I2A
+    # code.
     def transform_input(self, X, sess):
         return [X]
 
@@ -89,6 +88,7 @@ class CnnPolicy(object):
         return [self.X]
 
 
+# generic graph for a2c.
 class ActorCritic(object):
     def __init__(self, sess, policy, ob_space, ac_space, nenvs, nsteps,
         ent_coef, vf_coef, max_grad_norm, lr, alpha, epsilon, should_summary):
@@ -135,6 +135,7 @@ class ActorCritic(object):
 
         name_scope = tf.contrib.framework.get_name_scope()
 
+        # Used if we are loading in a scope different than what we saved in.
         def fix_tf_name(name, name_scope=None):
             if name_scope is not None:
                 name = name[len(name_scope) + 1:]
@@ -148,6 +149,7 @@ class ActorCritic(object):
         self.saver = tf.train.Saver(params, max_to_keep=15)
 
 
+    # generic training code for one iteration.
     def train(self, obs, rewards, masks, actions, values, step, summary_op=None):
         advs = rewards - values
 
@@ -198,6 +200,7 @@ class ActorCritic(object):
 
 def get_actor_critic(sess, nenvs, nsteps, ob_space, ac_space,
         policy, should_summary=True):
+    # TUNABLE HYPERPARAMETERS FOR A2C TRAINING
     vf_coef=0.5
     ent_coef=0.01
     max_grad_norm=0.5

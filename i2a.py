@@ -12,7 +12,8 @@ from env_model import create_env_model
 from a2c import get_actor_critic, train, CnnPolicy
 from common.pacman_util import num_pixels, mode_rewards, pix_to_target, rewards_to_target, mode_rewards, target_to_pix
 
-
+# Softmax function for numpy taken from
+# https://nolanbconaway.github.io/blog/2017/softmax-numpy
 def softmax(X, theta = 1.0, axis = None):
     """
     Compute the softmax of each element along an axis of X.
@@ -112,6 +113,7 @@ class ImaginationCore(object):
                         self.env_model.input_actions: onehot_action,
                 })
 
+            # TODO: Add some code here to visualize the imaginations?
             imagined_state, imagined_reward = convert_target_to_real(rollout_batch_size, nw, nh, nc, imagined_state, imagined_reward)
 
             onehot_reward = np.zeros((rollout_batch_size, self.num_rewards))
@@ -125,7 +127,7 @@ class ImaginationCore(object):
 
         return np.array(rollout_states), np.array(rollout_rewards)
 
-
+# So the model is not loaded twice.
 g_actor_critic = None
 def get_cache_loaded_a2c(sess, nenvs, nsteps, ob_space, ac_space):
     global g_actor_critic
@@ -138,6 +140,7 @@ def get_cache_loaded_a2c(sess, nenvs, nsteps, ob_space, ac_space):
     return g_actor_critic
 
 
+# So the model is not loaded twice.
 g_env_model = None
 def get_cache_loaded_env_model(sess, nenvs, ob_space, num_actions):
     global g_env_model
@@ -155,9 +158,11 @@ def get_cache_loaded_env_model(sess, nenvs, ob_space, num_actions):
     return g_env_model
 
 
-
 class I2aPolicy(object):
     def __init__(self, sess, ob_space, ac_space, nbatch, nsteps, reuse=False):
+        # Hyperparameter of how far ahead in the future the agent "imagines"
+        # Currently this is specifying one frame in the future.
+        num_rollouts = 1
         hidden_size = 256
         nsteps = 5
 
@@ -167,8 +172,6 @@ class I2aPolicy(object):
 
         actor_critic = get_cache_loaded_a2c(sess, nbatch, nsteps, ob_space, ac_space)
         env_model = get_cache_loaded_env_model(sess, nbatch, ob_space, num_actions)
-
-        num_rollouts = 1
 
         self.imagination = ImaginationCore(num_rollouts, num_actions, num_rewards,
                 ob_space, actor_critic, env_model)
@@ -202,6 +205,7 @@ class I2aPolicy(object):
             hidden_state = tf.reshape(hidden_state, [state_batch_size, 80 * 256
                 // 16])
 
+            # Combine both paths
             x = tf.concat([features, hidden_state], axis=1)
             x = tf.layers.dense(x, 256, activation=tf.nn.relu)
 
@@ -264,6 +268,7 @@ class I2aPolicy(object):
         })
         return v
 
+    # Add the imagined states to the default input.
     def get_inputs(self):
         return [self.imagined_state, self.imagined_reward, self.state]
 
@@ -274,7 +279,8 @@ class I2aPolicy(object):
 
 
 if __name__ == '__main__':
-    #os.environ["CUDA_VISIBLE_DEVICES"]="0"
+    os.environ["CUDA_VISIBLE_DEVICES"]="0"
+    # Train using typical a2c algorithm.
     train(I2aPolicy, 'i2a', summarize=True, log_path='./i2a_logs')
 
 

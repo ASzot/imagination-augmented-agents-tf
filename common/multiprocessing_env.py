@@ -1,4 +1,4 @@
-#This code is from openai baseline
+# Code is from OpenAI baseline.
 #https://github.com/openai/baselines/tree/master/baselines/common/vec_env
 
 import numpy as np

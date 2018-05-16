@@ -1,3 +1,6 @@
+# From @higgsfield
+# https://github.com/higgsfield/Imagination-Augmented-Agents
+
 import gym
 import numpy as np
 from gym import spaces
