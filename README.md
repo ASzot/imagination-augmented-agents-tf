@@ -28,9 +28,6 @@ Code from OpenAI's Baseline is used for multiprocessing
 (`common/multiprocessing_env.py`). DeepMind's implementation of MiniPacman
 is used (`common/deepmind.py`). Implementation of `common/minipacman.py` is from @higgsfield.
 
-OpenAI's code for Pacman and multiprocessing features were used
-and are under `./common/`.
-
 ## Prerequisites
 - TensorFlow 1.4.1
 - NumPy 1.14.0
