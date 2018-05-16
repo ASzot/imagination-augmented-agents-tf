@@ -13,12 +13,12 @@ trajectories for the imagination augmented agent. To efficiently use these
 simulated trajectories, the agent learns an encoder that extracts information from these
 imaginations including both state and reward.
 
-![Network Architecture](https://github.com/ASzot/imagination-augmented-agents-tf/img/arch.png "Network architecture")
+![Network Architecture](https://github.com/ASzot/imagination-augmented-agents-tf/raw/master/img/arch.png "Network architecture")
 
 Above is the network architecture diagram from the paper. Below is the
 architecture of the environment model, also taken from the paper.
 
-![Environment Model](https://github.com/ASzot/imagination-augmented-agents-tf/img/env_model.png "Environment Model")
+![Environment Model](https://github.com/ASzot/imagination-augmented-agents-tf/raw/master/img/env_model.png "Environment Model")
 
 This implementation was done according to the specifications of the
 architecture in the appendix of the paper for Pacman. The game used in this was
