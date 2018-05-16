@@ -34,13 +34,13 @@ class CnnPolicy(object):
         with tf.variable_scope("model", reuse=reuse):
             conv1 = tf.layers.conv2d(activation=tf.nn.relu,
                                         inputs=X,
-                                        num_outputs=16,
+                                        filters=16,
                                         kernel_size=[3,3],
                                         strides=[1,1],
                                         padding='VALID')
             conv2 = tf.layers.conv2d(activation=tf.nn.relu,
                                         inputs=conv1,
-                                        num_outputs=16,
+                                        filters=16,
                                         kernel_size=[3,3],
                                         strides=[2,2],
                                         padding='VALID')
@@ -48,14 +48,14 @@ class CnnPolicy(object):
             with tf.variable_scope('pi'):
                 pi = tf.layers.dense(h, nact,
                         activation=None,
-                        weights_initializer=tf.random_normal_initializer(0.01),
-                        biases_initializer=None)
+                        kernel_initializer=tf.random_normal_initializer(0.01),
+                        bias_initializer=None)
 
             with tf.variable_scope('v'):
                 vf = tf.layers.dense(h, 1,
                         activation=None,
-                        weights_initializer=tf.random_normal_initializer(0.01),
-                        biases_initializer=None)[:, 0]
+                        kernel_initializer=tf.random_normal_initializer(0.01),
+                        bias_initializer=None)[:, 0]
 
         # Sample action. `pi` is like the logits
         u = tf.random_uniform(tf.shape(pi))

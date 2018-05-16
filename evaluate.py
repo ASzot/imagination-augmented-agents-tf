@@ -21,8 +21,8 @@ states = env.reset()
 
 with tf.Session() as sess:
     actor_critic = get_actor_critic(sess, nenvs, nsteps, ob_space, ac_space,
-            I2aPolicy, False)
-    actor_critic.load('./weights/i2a_200000.ckpt')
+            CnnPolicy, False)
+    actor_critic.load('./weights/model_100000.ckpt')
 
     total_reward = 0
 
