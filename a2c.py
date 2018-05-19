@@ -259,7 +259,7 @@ def train(policy, save_name, load_count = 0, summarize=True, load_path=None, log
         episode_rewards = np.zeros((nenvs, ))
         final_rewards   = np.zeros((nenvs, ))
 
-        for update in tqdm(range(load_count + 1, total_timesteps)):
+        for update in tqdm(range(load_count + 1, total_timesteps + 1)):
             # mb stands for mini batch
             mb_obs, mb_rewards, mb_actions, mb_values, mb_dones = [],[],[],[],[]
             for n in range(nsteps):
@@ -331,10 +331,11 @@ def train(policy, save_name, load_count = 0, summarize=True, load_path=None, log
 if __name__ == '__main__':
     os.environ["CUDA_VISIBLE_DEVICES"]="0"
 
-    load_count = 100000
-    load_path = 'weights/model_%i.ckpt' % load_count
+    load_count = 0
+    load_path = 'weights/a2c_%i.ckpt' % load_count
     load_path = None
 
-    train(CnnPolicy, 'a2c', load_count, load_path, './a2c_logs')
+    train(CnnPolicy, 'a2c', load_count=load_count, load_path=load_path,
+            log_path='./a2c_logs')
 
 

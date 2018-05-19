@@ -135,7 +135,7 @@ def get_cache_loaded_a2c(sess, nenvs, nsteps, ob_space, ac_space):
         with tf.variable_scope('actor'):
             g_actor_critic = get_actor_critic(sess, nenvs, nsteps, ob_space,
                     ac_space, CnnPolicy, should_summary=False)
-        g_actor_critic.load('weights/model_100000.ckpt')
+        g_actor_critic.load('weights/a2c_200000.ckpt')
         print('Actor restored!')
     return g_actor_critic
 

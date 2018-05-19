@@ -164,7 +164,7 @@ if __name__ == '__main__':
     os.environ["CUDA_VISIBLE_DEVICES"]="1"
     with tf.Session() as sess:
         actor_critic = get_actor_critic(sess, nenvs, nsteps, ob_space, ac_space, CnnPolicy, should_summary=False)
-        actor_critic.load('weights/model_100000.ckpt')
+        actor_critic.load('weights/a2c_200000.ckpt')
 
         with tf.variable_scope('env_model'):
             env_model = create_env_model(ob_space, num_actions, num_pixels, len(mode_rewards['regular']))
