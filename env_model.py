@@ -12,6 +12,20 @@ from tqdm import tqdm
 
 from common.pacman_util import num_pixels, mode_rewards, pix_to_target, rewards_to_target
 
+# How many iterations we are training the environment model for.
+NUM_UPDATES = 5000
+
+LOG_INTERVAL = 100
+
+N_ENVS = 16
+N_STEPS = 5
+
+# This can be anything from "regular" "avoid" "hunt" "ambush" "rush" each
+# resulting in a different reward function giving the agent different behavior.
+REWARD_MODE = 'regular'
+
+# Replace this with the location of your own weights.
+A2C_WEIGHTS = 'weights/a2c_200000.ckpt'
 
 def pool_inject(X, batch_size, depth, width, height):
     m = tf.layers.max_pooling2d(X, pool_size=(width, height), strides=(width, height))
@@ -116,7 +130,7 @@ def create_env_model(obs_shape, num_actions, num_pixels, num_rewards,
 
 def make_env():
     def _thunk():
-        env = MiniPacman('regular', 1000)
+        env = MiniPacman(REWARD_MODE, 1000)
         return env
 
     return _thunk
@@ -151,29 +165,23 @@ class EnvModelData(object):
 
 
 if __name__ == '__main__':
-    nenvs = 16
-    nsteps = 5
-
-    envs = [make_env() for i in range(nenvs)]
+    envs = [make_env() for i in range(N_ENVS)]
     envs = SubprocVecEnv(envs)
 
     ob_space = envs.observation_space.shape
     ac_space = envs.action_space
     num_actions = envs.action_space.n
 
-    os.environ["CUDA_VISIBLE_DEVICES"]="1"
     with tf.Session() as sess:
-        actor_critic = get_actor_critic(sess, nenvs, nsteps, ob_space, ac_space, CnnPolicy, should_summary=False)
-        actor_critic.load('weights/a2c_200000.ckpt')
+        actor_critic = get_actor_critic(sess, N_ENVS, N_STEPS, ob_space, ac_space, CnnPolicy, should_summary=False)
+        actor_critic.load(A2C_WEIGHTS)
 
         with tf.variable_scope('env_model'):
-            env_model = create_env_model(ob_space, num_actions, num_pixels, len(mode_rewards['regular']))
+            env_model = create_env_model(ob_space, num_actions, num_pixels,
+                    len(mode_rewards[REWARD_MODE]))
 
         summary_op = tf.summary.merge_all()
         sess.run(tf.global_variables_initializer())
-
-        num_updates = 5000
-        log_interval = 100
 
         losses = []
         all_rewards = []
@@ -187,12 +195,12 @@ if __name__ == '__main__':
 
         writer = tf.summary.FileWriter('./env_logs', graph=sess.graph)
 
-        for frame_idx, states, actions, rewards, next_states, dones in tqdm(play_games(actor_critic, envs, num_updates), total=num_updates):
+        for frame_idx, states, actions, rewards, next_states, dones in tqdm(play_games(actor_critic, envs, NUM_UPDATES), total=NUM_UPDATES):
             target_state = pix_to_target(next_states)
-            target_reward = rewards_to_target('regular', rewards)
+            target_reward = rewards_to_target(REWARD_MODE, rewards)
 
-            onehot_actions = np.zeros((nenvs, num_actions, width, height))
-            onehot_actions[range(nenvs), actions] = 1
+            onehot_actions = np.zeros((N_ENVS, num_actions, width, height))
+            onehot_actions[range(N_ENVS), actions] = 1
             # Change so actions are the 'depth of the image' as tf expects
             onehot_actions = onehot_actions.transpose(0, 2, 3, 1)
 
@@ -210,7 +218,7 @@ if __name__ == '__main__':
                     env_model.target_rewards: target_reward
                 })
 
-            if frame_idx % log_interval == 0:
+            if frame_idx % LOG_INTERVAL == 0:
                 print('%i) %.5f, %.5f, %.5f' % (frame_idx, l, reward_loss, image_loss))
             writer.add_summary(summary, frame_idx)
 

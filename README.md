@@ -39,7 +39,7 @@ listed above are important.
 Train the actor critic model using the following. Training this is a necessary
 baseline and needs to be used to train the environment model.
 ```
-python a2c.py
+python main.py a2c
 ```
 
 Train the environment model using the following. Remember the a2c model must be
@@ -51,8 +51,9 @@ python env_model.py
 Train the imagination augmented agent using the following. Remember the
 environment model must already be trained. 
 ```
-python i2a.py
+python main.py i2a
 ```
+
 
 Evaluate any agent (in the terminal). Change the model checkpoint to whichever
 actor you would like to evaluate (either from i2a or a2c). 
@@ -65,3 +66,12 @@ Notebook.
 
 To see the imagined states from the environment model visually run the
 `eval_env_model.ipynb` Jupyter Notebook.
+
+
+The hyperparameters of this model all work great for minipacman. The hyperparameters for the actor critic training can be found at the top of `a2c.py`. The hyperparamters can be found for the imagination part at the to top of `i2a.py` but they can be found at
+the top of the `i2a.py` file, for the environment model at top of
+`env_model.py` and for the overall training at the top of `main.py`. `N_ENV` is
+the number of environments which are concurrently being simulated and trained
+on. You can change this number based on the speed of your system.
+`NUM_ROLLOUTS` is an interesting hyperparameter to play with as it corresponds to
+the number of imagined states in the future. 

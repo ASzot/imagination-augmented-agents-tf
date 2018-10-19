@@ -1,21 +1,14 @@
-# Inspired from OpenAI Baselines. This uses the same design of having an easily
-# substitutable generic policy that can be trained. This allows to easily
-# substitute in the I2A policy as opposed to the basic CNN one.
 import os
 import numpy as np
 import tensorflow as tf
-from common.minipacman import MiniPacman
-from common.multiprocessing_env import SubprocVecEnv
-from tqdm import tqdm
 
-def discount_with_dones(rewards, dones, gamma):
-    discounted = []
-    r = 0
-    for reward, done in zip(rewards[::-1], dones[::-1]):
-        r = reward + gamma*r*(1.-done) # fixed off by one bug
-        discounted.append(r)
-    return discounted[::-1]
-
+# TUNABLE HYPERPARAMETERS FOR A2C TRAINING
+VF_COEFF=0.5
+ENTROPY_COEFF=0.01
+MAX_GRAD_NORM=0.5
+LR=7e-4
+EPSILON=1e-5
+ALPHA=0.99
 
 def cat_entropy(logits):
     a0 = logits - tf.reduce_max(logits, 1, keep_dims=True)
@@ -90,9 +83,7 @@ class CnnPolicy(object):
 
 # generic graph for a2c.
 class ActorCritic(object):
-    def __init__(self, sess, policy, ob_space, ac_space, nenvs, nsteps,
-        ent_coef, vf_coef, max_grad_norm, lr, alpha, epsilon, should_summary):
-
+    def __init__(self, sess, policy, ob_space, ac_space, nenvs, nsteps, should_summary):
         self.sess = sess
 
         nact = ac_space.n
@@ -114,17 +105,17 @@ class ActorCritic(object):
         # Value function loss
         self.vf_loss = tf.reduce_mean(tf.square(tf.squeeze(self.train_model.vf) - self.rewards) / 2.0)
         self.entropy = tf.reduce_mean(cat_entropy(self.train_model.pi))
-        self.loss = self.pg_loss - (self.entropy * ent_coef) + (self.vf_loss * vf_coef)
+        self.loss = self.pg_loss - (self.entropy * ENTROPY_COEFF) + (self.vf_loss * VF_COEFF)
 
         with tf.variable_scope('model'):
             params = tf.trainable_variables()
 
         grads = tf.gradients(self.loss, params)
-        if max_grad_norm is not None:
-            grads, grad_norm = tf.clip_by_global_norm(grads, max_grad_norm)
+        if MAX_GRAD_NORM is not None:
+            grads, grad_norm = tf.clip_by_global_norm(grads, MAX_GRAD_NORM)
         grads = list(zip(grads, params))
 
-        trainer = tf.train.RMSPropOptimizer(learning_rate=lr, decay=alpha, epsilon=epsilon)
+        trainer = tf.train.RMSPropOptimizer(learning_rate=LR, decay=ALPHA, EPSILON=EPSILON)
         self.opt = trainer.apply_gradients(grads)
 
         # Tensorboard
@@ -200,142 +191,8 @@ class ActorCritic(object):
 
 def get_actor_critic(sess, nenvs, nsteps, ob_space, ac_space,
         policy, should_summary=True):
-    # TUNABLE HYPERPARAMETERS FOR A2C TRAINING
-    vf_coef=0.5
-    ent_coef=0.01
-    max_grad_norm=0.5
-    lr=7e-4
-    epsilon=1e-5
-    alpha=0.99
-    actor_critic = ActorCritic(sess, policy, ob_space, ac_space, nenvs, nsteps,
-            ent_coef, vf_coef, max_grad_norm, lr, alpha, epsilon,
-            should_summary)
+
+    actor_critic = ActorCritic(sess, policy, ob_space, ac_space, nenvs, nsteps, should_summary)
 
     return actor_critic
-
-
-def train(policy, save_name, load_count = 0, summarize=True, load_path=None, log_path = './logs'):
-    nenvs = 16
-    nsteps=5
-    total_timesteps=int(1e6)
-    gamma=0.99
-    log_interval=100
-    save_interval = 1e5
-    save_path = 'weights'
-
-    def make_env():
-        def _thunk():
-            env = MiniPacman('regular', 1000)
-            return env
-
-        return _thunk
-
-    envs = [make_env() for i in range(nenvs)]
-    envs = SubprocVecEnv(envs)
-
-    ob_space = envs.observation_space.shape
-    nw, nh, nc = ob_space
-    ac_space = envs.action_space
-
-    obs = envs.reset()
-
-    with tf.Session() as sess:
-        actor_critic = get_actor_critic(sess, nenvs, nsteps, ob_space,
-                ac_space, policy, summarize)
-        if load_path is not None:
-            actor_critic.load(load_path)
-            print('Loaded a2c')
-
-        summary_op = tf.summary.merge_all()
-        writer = tf.summary.FileWriter(log_path, graph=sess.graph)
-
-        sess.run(tf.global_variables_initializer())
-
-        batch_ob_shape = (nenvs*nsteps, nw, nh, nc)
-
-        dones = [False for _ in range(nenvs)]
-        nbatch = nenvs * nsteps
-
-        episode_rewards = np.zeros((nenvs, ))
-        final_rewards   = np.zeros((nenvs, ))
-
-        for update in tqdm(range(load_count + 1, total_timesteps + 1)):
-            # mb stands for mini batch
-            mb_obs, mb_rewards, mb_actions, mb_values, mb_dones = [],[],[],[],[]
-            for n in range(nsteps):
-                actions, values, _ = actor_critic.act(obs)
-
-                mb_obs.append(np.copy(obs))
-                mb_actions.append(actions)
-                mb_values.append(values)
-                mb_dones.append(dones)
-
-                obs, rewards, dones, _ = envs.step(actions)
-
-                episode_rewards += rewards
-                masks = 1 - np.array(dones)
-                final_rewards *= masks
-                final_rewards += (1 - masks) * episode_rewards
-                episode_rewards *= masks
-
-                mb_rewards.append(rewards)
-
-            mb_dones.append(dones)
-
-            #batch of steps to batch of rollouts
-            mb_obs = np.asarray(mb_obs, dtype=np.float32).swapaxes(1, 0).reshape(batch_ob_shape)
-            mb_rewards = np.asarray(mb_rewards, dtype=np.float32).swapaxes(1, 0)
-            mb_actions = np.asarray(mb_actions, dtype=np.int32).swapaxes(1, 0)
-            mb_values = np.asarray(mb_values, dtype=np.float32).swapaxes(1, 0)
-            mb_dones = np.asarray(mb_dones, dtype=np.bool).swapaxes(1, 0)
-            mb_masks = mb_dones[:, :-1]
-            mb_dones = mb_dones[:, 1:]
-
-            last_values = actor_critic.critique(obs).tolist()
-
-            #discount/bootstrap off value fn
-            for n, (rewards, d, value) in enumerate(zip(mb_rewards, mb_dones, last_values)):
-                rewards = rewards.tolist()
-                d = d.tolist()
-                if d[-1] == 0:
-                    rewards = discount_with_dones(rewards+[value], d+[0], gamma)[:-1]
-                else:
-                    rewards = discount_with_dones(rewards, d, gamma)
-                mb_rewards[n] = rewards
-
-            mb_rewards = mb_rewards.flatten()
-            mb_actions = mb_actions.flatten()
-            mb_values = mb_values.flatten()
-            mb_masks = mb_masks.flatten()
-
-            if summarize:
-                loss, policy_loss, value_loss, policy_entropy, _, summary = actor_critic.train(mb_obs,
-                        mb_rewards, mb_masks, mb_actions, mb_values, update,
-                        summary_op)
-                writer.add_summary(summary, update)
-            else:
-                loss, policy_loss, value_loss, policy_entropy, _ = actor_critic.train(mb_obs,
-                        mb_rewards, mb_masks, mb_actions, mb_values, update)
-
-            if update % log_interval == 0 or update == 1:
-                print('%i): %.4f, %.4f, %.4f' % (update, policy_loss, value_loss, policy_entropy))
-                print(final_rewards.mean())
-
-            if update % save_interval == 0:
-                print('Saving model')
-                actor_critic.save(save_path, save_name + '_' + str(update) + '.ckpt')
-
-        actor_critic.save(save_path, save_name + '_done.ckpt')
-
-
-if __name__ == '__main__':
-    os.environ["CUDA_VISIBLE_DEVICES"]="0"
-
-    load_count = 0
-    load_path = 'weights/a2c_%i.ckpt' % load_count
-    load_path = None
-
-    train(CnnPolicy, 'a2c', load_count=load_count, load_path=load_path,
-            log_path='./a2c_logs')
-
 
