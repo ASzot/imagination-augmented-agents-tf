@@ -9,7 +9,7 @@ from common.multiprocessing_env import SubprocVecEnv
 from tqdm import tqdm
 
 from env_model import create_env_model
-from a2c import get_actor_critic, train, CnnPolicy
+from a2c import get_actor_critic, CnnPolicy
 from common.pacman_util import num_pixels, mode_rewards, pix_to_target, rewards_to_target, mode_rewards, target_to_pix
 
 

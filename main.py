@@ -7,6 +7,9 @@ import tensorflow as tf
 from common.minipacman import MiniPacman
 from common.multiprocessing_env import SubprocVecEnv
 from tqdm import tqdm
+import argparse
+from i2a import I2aPolicy
+from a2c import CnnPolicy, get_actor_critic
 
 
 N_ENVS = 16
@@ -155,5 +158,5 @@ if __name__ == '__main__':
     else:
         raise ValueError('Must specify the algo name as either a2c or i2a')
 
-    train(policy, algo.name, summarize=True, log_path=algo.name + '_logs')
+    train(policy, args.algo, summarize=True, log_path=args.algo + '_logs')
 

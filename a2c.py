@@ -115,7 +115,8 @@ class ActorCritic(object):
             grads, grad_norm = tf.clip_by_global_norm(grads, MAX_GRAD_NORM)
         grads = list(zip(grads, params))
 
-        trainer = tf.train.RMSPropOptimizer(learning_rate=LR, decay=ALPHA, EPSILON=EPSILON)
+        trainer = tf.train.RMSPropOptimizer(learning_rate=LR, decay=ALPHA,
+                epsilon=EPSILON)
         self.opt = trainer.apply_gradients(grads)
 
         # Tensorboard
